@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=64", "setuptools_scm>=8", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tcinit"
+description = "Adjust atmosphere-model initial conditions to match tropical-cyclone best-track intensities."
+authors = [
+    { name = "Peter Bosler", email = "pabosle@sandia.gov" },
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "License :: OSI Approved :: MIT License",
+]
+dynamic = ["version"]
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.21",
+    "scipy>=1.7",
+    "pandas>=1.5",
+    "xarray>=2023.1",
+    "matplotlib>=3.6",
+]
+
+[project.optional-dependencies]
+aurora = ["microsoft-aurora", "torch>=1.9"]
+neuralgcm = ["neuralgcm"]
+hiccup = ["netCDF4", "h5netcdf"]
+plotting = ["cartopy"]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "ruff",
+    "black",
+    "build",
+]
+
+[tool.setuptools]
+[tool.setuptools.packages.find]
+include = ["tcinit", "tcinit.*"]
+[tool.setuptools_scm]
+
+[tool.black]
+line-length = 88
+
+[tool.pytest.ini_options]
+norecursedirs = [".git", ".venv", "build", "dist", "__pycache__", "external"]
+addopts = "--strict-markers"
+markers = [
+    "aurora: requires microsoft-aurora / torch",
+    "neuralgcm: requires neuralgcm / jax",
+    "hiccup: requires HICCUP-adjacent tooling",
+    "slow: marks tests as slow",
+]
+testpaths = ["tests"]
