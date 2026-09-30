@@ -223,3 +223,11 @@ __marimo__/
 data/*.grb
 data/*.grib
 data/*.nc
+
+# Case-study artefacts (sliced-box netcdfs, HICCUP outputs, PNGs)
+# derive from the ignored grib inputs; regenerate by running the notebook.
+data/case_study_*/
+# cfgrib scratch (index files + cache dir).
+data/*.idx
+data/.cd/
+notebooks/.ipynb_checkpoints/
