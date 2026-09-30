@@ -21,7 +21,7 @@ from tcinit.naming import (
     sfno_variables_73,
 )
 from tcinit.snapshot import Snapshot
-from tcinit.vortex import BogusVortex
+from tcinit.ideal_tc_vortex import BogusVortex
 from tests.conftest import make_best_track
 
 

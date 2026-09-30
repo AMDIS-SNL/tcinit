@@ -10,7 +10,7 @@ import xarray as xr
 
 from tcinit.backends import neuralgcm_backend
 from tcinit.snapshot import Snapshot
-from tcinit.vortex import BogusVortex
+from tcinit.ideal_tc_vortex import BogusVortex
 from tests.conftest import DEFAULT_LEVELS_HPA, make_best_track
 
 

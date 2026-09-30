@@ -47,7 +47,7 @@ from tcinit.naming import (
     ERA5_VAR_MAP,
     SURF_VARS,
 )
-from tcinit.vortex import BogusVortex
+from tcinit.ideal_tc_vortex import BogusVortex
 
 # Coord names that ERA5 has used across CDS versions. First match wins on
 # auto-detect. Canonical (returned by extract) is always ``level``/``time``.

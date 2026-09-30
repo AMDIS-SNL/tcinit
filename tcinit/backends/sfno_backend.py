@@ -41,7 +41,7 @@ from tcinit.naming import (
     SURF_VARS,
     sfno_channel_index,
 )
-from tcinit.vortex import BogusVortex
+from tcinit.ideal_tc_vortex import BogusVortex
 
 
 def _tensor_to_numpy(t) -> np.ndarray:
@@ -241,7 +241,7 @@ def write_back(
     Broadcasts the box slice across every ``(batch, time, lead_time)`` slot,
     matching :mod:`tcinit.backends.aurora_backend`'s convention of injecting
     the same vortex at every input time. Because
-    :meth:`tcinit.vortex.BogusVortex.apply` already applied a cosine taper
+    :meth:`tcinit.ideal_tc_vortex.BogusVortex.apply` already applied a cosine taper
     (blend=0 outside the storm mask), this is a straight overwrite of the
     box slice — no per-cell blending here.
 

@@ -39,7 +39,7 @@ import numpy as np
 import xarray as xr
 
 from tcinit.naming import ATMOS_VARS, SURF_VARS, WEATHERNEXT_VAR_MAP
-from tcinit.vortex import BogusVortex
+from tcinit.ideal_tc_vortex import BogusVortex
 
 
 def _find_box_indices(global_coord: np.ndarray, target: np.ndarray, name: str) -> slice:

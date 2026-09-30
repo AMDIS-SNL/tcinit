@@ -1,7 +1,7 @@
 """Model-agnostic storm-centric analysis window on a canonical xarray Dataset.
 
 Snapshot bundles the geometry and environment statistics that
-:class:`tcinit.vortex.BogusVortex` needs: box lat/lon coordinates, isobaric
+:class:`tcinit.ideal_tc_vortex.BogusVortex` needs: box lat/lon coordinates, isobaric
 levels, storm centre ``loc``, reference disk radius ``rdr`` (km), storm and
 environment boolean masks, environment-mean MSLP, and storm-mean 2 m T.
 

@@ -2,7 +2,7 @@
 
 from tcinit.best_track import BestTrack
 from tcinit.snapshot import Snapshot
-from tcinit.vortex import BogusVortex
+from tcinit.ideal_tc_vortex import BogusVortex
 
 __all__ = ["BestTrack", "Snapshot", "BogusVortex"]
 

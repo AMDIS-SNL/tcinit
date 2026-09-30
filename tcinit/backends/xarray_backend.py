@@ -13,7 +13,7 @@ from typing import Mapping, Optional
 
 import xarray as xr
 
-from tcinit.vortex import BogusVortex
+from tcinit.ideal_tc_vortex import BogusVortex
 
 
 def apply(

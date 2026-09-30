@@ -42,7 +42,7 @@ import numpy as np
 import xarray as xr
 
 from tcinit.naming import NEURALGCM_VAR_MAP
-from tcinit.vortex import BogusVortex
+from tcinit.ideal_tc_vortex import BogusVortex
 
 # ---------------------------------------------------------------------------
 # xarray-native path (unchanged public API)
@@ -237,7 +237,7 @@ def write_back(
     (e.g. ``sim_time`` scalars) and variables absent from ``modified_ds``
     are carried through untouched.
 
-    Because :meth:`tcinit.vortex.BogusVortex.apply` already applied the
+    Because :meth:`tcinit.ideal_tc_vortex.BogusVortex.apply` already applied the
     cosine taper (blend=0 outside the storm mask), this is a straight
     overwrite of the box slice — no per-cell blending is done here.
 

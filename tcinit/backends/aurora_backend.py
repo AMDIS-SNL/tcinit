@@ -147,7 +147,7 @@ def write_back(
 ):
     """Blend a modified canonical Dataset back into an Aurora Batch in-place.
 
-    Because :meth:`tcinit.vortex.BogusVortex.apply` already applied the cosine
+    Because :meth:`tcinit.ideal_tc_vortex.BogusVortex.apply` already applied the cosine
     taper (blend=0 outside the storm mask), this is a straight overwrite of
     the box slice — no per-cell blending is needed here. The overwrite is
     replicated across every time slot in the batch, matching the prototype's

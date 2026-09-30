@@ -7,7 +7,7 @@ import matplotlib
 matplotlib.use("Agg")
 
 from tcinit.plotting import plot_state_diff  # noqa: E402
-from tcinit.vortex import BogusVortex  # noqa: E402
+from tcinit.ideal_tc_vortex import BogusVortex  # noqa: E402
 
 
 def test_plot_state_diff_writes_png(

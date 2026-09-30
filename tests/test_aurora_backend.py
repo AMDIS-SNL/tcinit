@@ -10,7 +10,7 @@ torch = pytest.importorskip("torch")
 
 from tcinit.backends import aurora_backend  # noqa: E402
 from tcinit.snapshot import Snapshot  # noqa: E402
-from tcinit.vortex import BogusVortex  # noqa: E402
+from tcinit.ideal_tc_vortex import BogusVortex  # noqa: E402
 from tests.conftest import DEFAULT_LEVELS_HPA, make_best_track  # noqa: E402
 
 

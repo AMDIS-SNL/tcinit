@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from tcinit.constants import HPA_TO_PA, KNOTS_TO_MPS
-from tcinit.vortex import (
+from tcinit.ideal_tc_vortex import (
     BETA_1_DEG,
     BogusVortex,
     K0_FRICTION,

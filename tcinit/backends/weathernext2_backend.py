@@ -22,7 +22,7 @@ import numpy as np
 import xarray as xr
 
 from tcinit.backends import weathernext_graph_backend as _wng
-from tcinit.vortex import BogusVortex
+from tcinit.ideal_tc_vortex import BogusVortex
 
 # WN2-only surface fields the K&C vortex does not synthesise. write_back
 # leaves these untouched even if the user's caller accidentally includes
