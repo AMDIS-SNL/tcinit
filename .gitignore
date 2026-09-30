@@ -218,3 +218,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Large binary IC inputs — user places these locally, not in the repo.
+data/*.grb
+data/*.grib
+data/*.nc
