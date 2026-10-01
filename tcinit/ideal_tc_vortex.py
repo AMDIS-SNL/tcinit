@@ -117,7 +117,9 @@ def _solve_holland_A(
 ) -> float:
     """Newton-Raphson solve for Holland's A parameter, K&C eqs. 7-8."""
     r_30_m = r_30_km * 1000.0
-    fr30_half = 0.5 * f_coriolis * r_30_m
+    # K&C eq. 7 is written with signed f; taking the magnitude of the cyclonic
+    # gradient wind requires |f| so SH storms converge to the correct V_g.
+    fr30_half = 0.5 * abs(f_coriolis) * r_30_m
     xi_30 = (R_0_KM / r_30_km) ** B
     coeff = B * dp_pa / rho * xi_30
 
@@ -303,8 +305,10 @@ class BogusVortex:
         self.phi_grid_rad = phi_grid
 
         # ---- Holland-style A, B (eqs. 5-8 with r_m := R_v) ---------------
+        # TODO: use moist R_star (R_D·(1 + 0.608·q)) instead of dry R_D so rho
+        # accounts for ambient humidity.
         self.rho = self.p_n / (R_D * self.T_0)
-        self.V_g_max = self.V_m / (K0_FRICTION * np.cos(np.deg2rad(BETA_0_DEG)))
+        self.V_g_max = (self.V_m / K0_FRICTION) * np.cos(np.deg2rad(BETA_0_DEG))
         dp = self.p_n - self.p_c
         if dp <= 0:
             raise ValueError(
@@ -455,7 +459,9 @@ class BogusVortex:
                 )
             Phi_anom_radial[k] = phi_radial
             dphi_dr = np.gradient(phi_radial, r_radial * 1000.0)
-            fr2 = 0.5 * self.f_coriolis * r_radial * 1000.0
+            # Use |f|: K&C eq. 16 with signed f gives the wrong magnitude in
+            # the SH; cyclonic-wind magnitude solves |V|^2/r + |f||V| = r dphi/dr.
+            fr2 = 0.5 * abs(self.f_coriolis) * r_radial * 1000.0
             under = fr2**2 + (r_radial * 1000.0) * dphi_dr
             under = np.maximum(under, 0.0)
             V_g_radial[k] = -fr2 + np.sqrt(under)
@@ -496,6 +502,10 @@ class BogusVortex:
         q0 = v_r_surface / (1.0 / np.cosh(15.0 * (0.999 - 0.98)))
         sigma_T = 0.01
 
+        # Note: K&C eq. 24 prints the first q_0 integral with bounds [0.98, 1],
+        # but eq. 23 unambiguously puts it on [sigma_a, 0.98] (the middle region
+        # where q_0 sech[d(sigma-0.98)] appears alongside q_1 sech[c(sigma-sigma_a)]).
+        # Eq. 24 has a bounds typo; we implement eq. 23.
         num = -q0 * (
             _arctan_block(d_r, sigma_a, 0.98, ref=0.98)
             + _arctan_block(np.full_like(d_r, 15.0), 0.98, 1.0, ref=0.98)

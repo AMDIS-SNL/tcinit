@@ -382,3 +382,217 @@ class Snapshot:
             self.t2m_storm_mean = float("nan")
 
         self.storm_computed = True
+
+    # ------------------------------------------------------------------
+    # Serialisation
+    # ------------------------------------------------------------------
+
+    def to_netcdf(
+        self,
+        path: str,
+        *,
+        source_ds: Optional[xr.Dataset] = None,
+        source_var_map: Optional[Mapping[str, str]] = None,
+        source_lat_name: str = "latitude",
+        source_lon_name: str = "longitude",
+        source_level_name: str = "level",
+        engine: str = "netcdf4",
+        complevel: int = 4,
+    ) -> None:
+        """Serialise this Snapshot to a self-contained NetCDF.
+
+        Writes the Snapshot's own state (box coords, cached surface fields,
+        masks, scalars). When ``source_ds`` is given, the atmospheric fields
+        needed by :func:`tcinit.plotting.plot_snapshot` (``t``, ``u``, ``v``,
+        ``q``) are bundled under ``src_<canonical>`` names so a reload is a
+        single file read.
+
+        Args:
+            path: Output ``.nc`` filename.
+            source_ds: Optional canonical Dataset to bundle atmospheric
+                fields from. Variables are translated through
+                ``source_var_map``.
+            source_var_map: canonical -> native name map for ``source_ds``.
+            source_lat_name, source_lon_name, source_level_name: coord
+                names in ``source_ds``.
+            engine: xarray NetCDF backend.
+            complevel: deflate compression level (0-9).
+        """
+        coords = {
+            "lat": ("lat", np.asarray(self.box_lats)),
+            "lon": ("lon", np.asarray(self.box_lons)),
+        }
+        if self.levels is not None:
+            coords["level"] = ("level", np.asarray(self.levels))
+
+        data_vars: dict = {}
+
+        def _add_2d(name: str, arr: Optional[np.ndarray], **attrs) -> None:
+            if arr is None:
+                return
+            data_vars[name] = xr.DataArray(
+                np.asarray(arr), dims=("lat", "lon"), attrs=attrs
+            )
+
+        def _add_scalar(name: str, val, **attrs) -> None:
+            if val is None:
+                data_vars[name] = xr.DataArray(np.nan, attrs=attrs)
+            else:
+                data_vars[name] = xr.DataArray(val, attrs=attrs)
+
+        # Cached surface fields.
+        _add_2d("_msl", self._msl, units="Pa", long_name="mean sea level pressure")
+        _add_2d("_t2m", self._t2m, units="K", long_name="2 m air temperature")
+        _add_2d("_u10", self._u10, units="m s-1", long_name="10 m zonal wind")
+        _add_2d("_v10", self._v10, units="m s-1", long_name="10 m meridional wind")
+
+        # Masks — only storm_mask is persisted (env_mask = ~storm_mask).
+        if self.storm_mask is not None:
+            data_vars["storm_mask"] = xr.DataArray(
+                np.asarray(self.storm_mask, dtype=np.uint8),
+                dims=("lat", "lon"),
+                attrs={"long_name": "storm interior mask (1=storm, 0=env)"},
+            )
+
+        # Scalars.
+        loc = self.loc if self.loc is not None else (np.nan, np.nan)
+        _add_scalar("loc_lat", float(loc[0]), units="degrees_north")
+        _add_scalar("loc_lon", float(loc[1]), units="degrees_east")
+        _add_scalar("rdr", self.rdr if self.rdr is not None else np.nan, units="km")
+        _add_scalar(
+            "rdr_from_wind", float(self.rdr_from_wind), units="km",
+            long_name="rdr diagnostic from 10 m wind maximum",
+        )
+        _add_scalar(
+            "rdr_from_grad", float(self.rdr_from_grad), units="km",
+            long_name="rdr diagnostic from max |grad MSLP|",
+        )
+        _add_scalar(
+            "mslp_env_mean",
+            self.mslp_env_mean if self.mslp_env_mean is not None else np.nan,
+            units="Pa",
+            long_name="environment-mean MSLP (K&C p_n)",
+        )
+        _add_scalar(
+            "t2m_storm_mean",
+            self.t2m_storm_mean if self.t2m_storm_mean is not None else np.nan,
+            units="K",
+            long_name="storm-mean 2 m T (K&C T_0)",
+        )
+        _add_scalar(
+            "storm_radius_multiplier",
+            float(self.storm_radius_multiplier),
+            long_name="multiplier applied to rdr for storm mask radius",
+        )
+        _add_scalar(
+            "fixed_rdr_km",
+            np.nan if self.fixed_rdr_km is None else float(self.fixed_rdr_km),
+            units="km",
+            long_name="user-fixed rdr; NaN when unset",
+        )
+
+        # Bundle atmospheric fields from the source Dataset if given.
+        if source_ds is not None and self.levels is not None:
+            if source_level_name in source_ds.dims:
+                # Align level order with self.levels.
+                src_sel = source_ds.sel(
+                    {source_level_name: list(self.levels)}, method="nearest"
+                )
+            else:
+                src_sel = source_ds
+            for canon in ("t", "u", "v", "q", "z"):
+                native = resolve(canon, source_var_map)
+                if native is None or native not in src_sel.data_vars:
+                    continue
+                arr = np.asarray(src_sel[native].values, dtype=float)
+                if arr.ndim == 3:
+                    data_vars[f"src_{canon}"] = xr.DataArray(
+                        arr,
+                        dims=("level", "lat", "lon"),
+                        attrs={"long_name": f"bundled {canon} from source Dataset"},
+                    )
+
+        attrs = {
+            "class_name": self.__class__.__name__,
+            "has_surface": int(bool(self.has_surface)),
+            "storm_computed": int(bool(self.storm_computed)),
+        }
+        ds_out = xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs)
+        comp = dict(zlib=True, complevel=int(complevel))
+        encoding = {name: comp for name in ds_out.data_vars}
+        ds_out.to_netcdf(path, engine=engine, encoding=encoding)
+
+    @classmethod
+    def from_netcdf(
+        cls,
+        path: str,
+        *,
+        engine: Optional[str] = None,
+    ) -> "Snapshot":
+        """Load a Snapshot (and any bundled atmospheric fields) from NetCDF.
+
+        Bundled atmospheric fields (``src_t``, ``src_u``, ``src_v``, ``src_q``,
+        ``src_z``) are stashed on the returned Snapshot as ``.src_<name>``
+        numpy arrays so ``plot_snapshot`` can be driven without reopening the
+        original Dataset.
+        """
+        ds = xr.open_dataset(path, engine=engine)
+
+        def _get_scalar(name: str, default=np.nan) -> float:
+            if name not in ds:
+                return default
+            v = ds[name].values
+            if isinstance(v, np.ndarray) and v.shape == ():
+                return v.item()
+            return v
+
+        fixed_rdr_raw = _get_scalar("fixed_rdr_km", np.nan)
+        fixed_rdr = None if not np.isfinite(fixed_rdr_raw) else float(fixed_rdr_raw)
+        snap = cls(
+            storm_radius_multiplier=float(_get_scalar("storm_radius_multiplier", 3.0)),
+            fixed_rdr_km=fixed_rdr,
+        )
+
+        snap.box_lats = np.asarray(ds["lat"].values, dtype=float)
+        snap.box_lons = np.asarray(ds["lon"].values, dtype=float)
+        if "level" in ds.coords or "level" in ds.dims:
+            snap.levels = np.asarray(ds["level"].values, dtype=float)
+
+        for attr, var in (
+            ("_msl", "_msl"),
+            ("_t2m", "_t2m"),
+            ("_u10", "_u10"),
+            ("_v10", "_v10"),
+        ):
+            if var in ds:
+                setattr(snap, attr, np.asarray(ds[var].values, dtype=float))
+        snap.has_surface = snap._msl is not None
+
+        if "storm_mask" in ds:
+            sm = np.asarray(ds["storm_mask"].values).astype(bool)
+            snap.storm_mask = sm
+            snap.env_mask = ~sm
+
+        loc_lat = float(_get_scalar("loc_lat", np.nan))
+        loc_lon = float(_get_scalar("loc_lon", np.nan))
+        if np.isfinite(loc_lat) and np.isfinite(loc_lon):
+            snap.loc = (loc_lat, loc_lon)
+        rdr = _get_scalar("rdr", np.nan)
+        snap.rdr = float(rdr) if np.isfinite(rdr) else None
+        snap.rdr_from_wind = float(_get_scalar("rdr_from_wind", np.nan))
+        snap.rdr_from_grad = float(_get_scalar("rdr_from_grad", np.nan))
+        mslp_env = _get_scalar("mslp_env_mean", np.nan)
+        snap.mslp_env_mean = float(mslp_env) if np.isfinite(mslp_env) else None
+        t2m_sm = _get_scalar("t2m_storm_mean", np.nan)
+        snap.t2m_storm_mean = float(t2m_sm) if np.isfinite(t2m_sm) else None
+
+        snap.storm_computed = bool(int(ds.attrs.get("storm_computed", 0)))
+
+        # Stash bundled atmospheric fields for plot_snapshot's convenience.
+        for canon in ("t", "u", "v", "q", "z"):
+            var = f"src_{canon}"
+            if var in ds:
+                setattr(snap, var, np.asarray(ds[var].values, dtype=float))
+
+        ds.close()
+        return snap
