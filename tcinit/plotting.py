@@ -313,7 +313,7 @@ def plot_state_diff(
     ]
 
     for i, ax in enumerate(axs.flat):
-        ax.set_extent([lon_lo, lon_hi, lat_lo, lat_hi], crs=ccrs.Geodetic())
+        ax.set_extent([lon_lo, lon_hi, lat_lo, lat_hi], crs=ccrs.PlateCarree())
         ax.coastlines(linewidth=0.5)
         row, col = divmod(i, 3)
         _add_map_labels(ax, show_bottom=(row == 1), show_left=(col == 0))
@@ -484,7 +484,7 @@ def plot_snapshot(
     ymin, ymax = float(lats.min()), float(lats.max())
 
     for i, ax in enumerate(axs.flat):
-        ax.set_extent([xmin, xmax, ymin, ymax], crs=ccrs.Geodetic())
+        ax.set_extent([xmin, xmax, ymin, ymax], crs=ccrs.PlateCarree())
         ax.coastlines(linewidth=0.5)
         row, col = divmod(i, 3)
         _add_map_labels(ax, show_bottom=(row == 2), show_left=(col == 0))

@@ -18,6 +18,7 @@ fields).
 
 from __future__ import annotations
 
+import datetime as _dt
 from typing import Mapping, Optional, Tuple
 
 import numpy as np
@@ -30,6 +31,28 @@ from tcinit.naming import resolve
 # ---------------------------------------------------------------------------
 # Small helpers (lifted from AuroraSnapshot, simplified to numpy-only)
 # ---------------------------------------------------------------------------
+
+
+def _as_py_datetime(x) -> Optional[_dt.datetime]:
+    """Convert a scalar ``datetime64``/``Timestamp``/``datetime`` to ``datetime``.
+
+    Returns ``None`` on anything the conversion can't handle (keeps the
+    caller branch-free).
+    """
+    if x is None:
+        return None
+    if isinstance(x, _dt.datetime):
+        return x
+    try:
+        if hasattr(x, "to_pydatetime"):
+            return x.to_pydatetime()
+        # np.datetime64 scalar -> seconds since epoch -> UTC datetime.
+        ns = (np.datetime64(x) - np.datetime64("1970-01-01T00:00:00")) / np.timedelta64(
+            1, "s"
+        )
+        return _dt.datetime.fromtimestamp(ns, tz=_dt.timezone.utc).replace(tzinfo=None)
+    except Exception:
+        return None
 
 
 def _distance_mask(
@@ -109,9 +132,14 @@ class Snapshot:
         *,
         storm_radius_multiplier: float = 3.0,
         fixed_rdr_km: Optional[float] = None,
+        valid_time: Optional[_dt.datetime] = None,
     ) -> None:
         self.storm_radius_multiplier = float(storm_radius_multiplier)
         self.fixed_rdr_km = fixed_rdr_km
+        # Valid time of this snapshot. Optional; populated by from_xarray when
+        # the source Dataset has a time coord, or passed in directly. Needed
+        # by RolloutSnapshots to order a sequence of snapshots.
+        self.valid_time: Optional[_dt.datetime] = valid_time
 
         # Populated by from_xarray:
         self.box_lats: Optional[np.ndarray] = None
@@ -157,6 +185,7 @@ class Snapshot:
         box: Optional[Tuple[float, float, float, float]] = None,
         storm_radius_multiplier: float = 3.0,
         fixed_rdr_km: Optional[float] = None,
+        valid_time: Optional[_dt.datetime] = None,
     ) -> "Snapshot":
         """Ingest a canonical xarray Dataset into a Snapshot.
 
@@ -179,10 +208,18 @@ class Snapshot:
         snap = cls(
             storm_radius_multiplier=storm_radius_multiplier,
             fixed_rdr_km=fixed_rdr_km,
+            valid_time=valid_time,
         )
 
         if time is not None and "time" in ds.dims:
             ds = ds.sel(time=time)
+
+        # If the (possibly sliced) Dataset has a scalar time coord and the
+        # caller didn't pass valid_time explicitly, pick it up.
+        if snap.valid_time is None and "time" in ds.coords:
+            t = ds["time"].values
+            if np.ndim(t) == 0:
+                snap.valid_time = _as_py_datetime(t)
 
         if box is not None:
             lat_min, lat_max, lon_min, lon_max = box
@@ -512,6 +549,9 @@ class Snapshot:
                         attrs={"long_name": f"bundled {canon} from source Dataset"},
                     )
 
+        if self.valid_time is not None:
+            coords["valid_time"] = np.datetime64(self.valid_time)
+
         attrs = {
             "class_name": self.__class__.__name__,
             "has_surface": int(bool(self.has_surface)),
@@ -587,6 +627,9 @@ class Snapshot:
         snap.t2m_storm_mean = float(t2m_sm) if np.isfinite(t2m_sm) else None
 
         snap.storm_computed = bool(int(ds.attrs.get("storm_computed", 0)))
+
+        if "valid_time" in ds.coords:
+            snap.valid_time = _as_py_datetime(ds["valid_time"].values)
 
         # Stash bundled atmospheric fields for plot_snapshot's convenience.
         for canon in ("t", "u", "v", "q", "z"):
