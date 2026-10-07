@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git mv *)",
+      "Bash(python3 /tmp/test_rollout_snapshots.py)"
+    ]
+  }
+}

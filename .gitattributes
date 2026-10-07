@@ -1,0 +1,12 @@
+# Strip Jupyter notebook outputs on commit via nbstripout.
+# Per-clone setup (see README): pip install -e ".[dev]" and
+#   nbstripout --install --attributes .gitattributes
+# The --attributes flag is required so nbstripout does NOT also write
+# rules to .git/info/attributes; entries there take precedence over
+# this file and would shadow the override below.
+*.ipynb filter=nbstripout
+*.ipynb diff=ipynb
+
+# Case-study notebooks keep their embedded outputs so they render on
+# GitHub without re-execution. Add any similar notebooks here.
+notebooks/case_study_wp02_2023.ipynb -filter -diff

@@ -36,6 +36,7 @@ dev = [
     "ruff",
     "black",
     "build",
+    "nbstripout",
 ]
 
 [tool.setuptools]
