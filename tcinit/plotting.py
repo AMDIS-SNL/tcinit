@@ -361,7 +361,7 @@ def plot_state_diff(
 
     if filename is not None:
         fig.savefig(filename, bbox_inches="tight", dpi=150)
-    plt.close(fig)
+        plt.close(fig)
 
 
 # ---------------------------------------------------------------------------
@@ -671,6 +671,10 @@ def plot_snapshot(
             parts.append(f"loc=({snapshot.loc[0]:.2f} N, {snapshot.loc[1]:.2f} E)")
         if snapshot.rdr is not None and np.isfinite(snapshot.rdr):
             parts.append(f"rdr={snapshot.rdr:.0f} km")
+            storm_radius_km = snapshot.storm_radius_multiplier * snapshot.rdr
+            parts.append(f"storm_radius={storm_radius_km:.0f} km")
+        if snapshot.mslp_min is not None and np.isfinite(snapshot.mslp_min):
+            parts.append(f"mslp_min={snapshot.mslp_min/HPA_TO_PA:.1f} hPa")
         if snapshot.mslp_env_mean is not None and np.isfinite(snapshot.mslp_env_mean):
             parts.append(f"p_n={snapshot.mslp_env_mean/HPA_TO_PA:.1f} hPa")
         title = "Snapshot — " + ", ".join(parts) if parts else "Snapshot"
@@ -678,4 +682,4 @@ def plot_snapshot(
 
     if filename is not None:
         fig.savefig(filename, bbox_inches="tight", dpi=150)
-    plt.close(fig)
+        plt.close(fig)

@@ -64,7 +64,7 @@ class BestTrack:
         "SU": 4,
     }
 
-    def __init__(self, best_tracks_csv: str):
+    def __init__(self, best_tracks_csv: Union[str, Path]):
         """Load and normalize a best-track file.
 
         Args:
@@ -72,6 +72,7 @@ class BestTrack:
                 ATCF ``.dat``). Filename must match ``b<basin><NN><YYYY>.*``
                 so the basin/number/year metadata can be parsed.
         """
+        best_tracks_csv = os.fspath(best_tracks_csv)
         self.best_tracks_csv = best_tracks_csv
         self.format_type = self.detect_format(best_tracks_csv)
         self.basin_long, self.basin_short, self.number, self.ID, self.year = (

@@ -165,6 +165,7 @@ class Snapshot:
         # Diagnostic sub-estimates from detect_storm (nan when unavailable):
         self.rdr_from_wind: float = float("nan")
         self.rdr_from_grad: float = float("nan")
+        self.mslp_min: Optional[float] = None
 
         self.storm_computed: bool = False
 
@@ -295,7 +296,7 @@ class Snapshot:
             self.box_lats, self.box_lons, box_center[0], box_center[1], max_loc_error_km
         )
 
-        _, mslp_loc = _find_extremum(
+        mslp_min, mslp_loc = _find_extremum(
             self._msl, self.box_lats, self.box_lons, find="min", mask=loc_guess_mask
         )
         if not (np.isfinite(mslp_loc[0]) and np.isfinite(mslp_loc[1])):
@@ -304,6 +305,7 @@ class Snapshot:
                 f"{max_loc_error_km} km disk at {box_center}"
             )
         self.loc = mslp_loc
+        self.mslp_min = float(mslp_min)
 
         # rdr_from_wind: distance to |10m wind| max in the same disk.
         if self._u10 is not None and self._v10 is not None:
@@ -350,11 +352,13 @@ class Snapshot:
         self._build_masks_and_means()
 
         if verbose:
+            storm_radius_km = self.storm_radius_multiplier * self.rdr
             print(
                 f"Snapshot: loc={self.loc}, rdr={self.rdr:.1f} km "
                 f"(wind={self.rdr_from_wind:.1f}, grad={self.rdr_from_grad:.1f}, "
-                f"guess={max_loc_error_km}); mslp_env_mean="
-                f"{self.mslp_env_mean/HPA_TO_PA:.1f} hPa, "
+                f"guess={max_loc_error_km}); storm_radius="
+                f"{storm_radius_km:.1f} km, mslp_min={self.mslp_min/HPA_TO_PA:.1f} hPa, "
+                f"mslp_env_mean={self.mslp_env_mean/HPA_TO_PA:.1f} hPa, "
                 f"t2m_storm_mean={self.t2m_storm_mean:.2f} K"
             )
         return self
