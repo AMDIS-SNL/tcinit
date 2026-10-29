@@ -32,9 +32,9 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - name: Install dev extras
+      - name: Install dev + plotting extras
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          pip install -e ".[dev,plotting]"
       - name: Run pytest
         run: pytest -q
