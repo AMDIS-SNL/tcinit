@@ -1,4 +1,7 @@
 # tcinit
+
+[![CI](https://github.com/AMDIS-SNL/tcinit/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/AMDIS-SNL/tcinit/actions/workflows/ci.yml)
+
 Create initial condition datasets for tropical cyclone modeling with atmospheric models.
 
 ## Developer setup
