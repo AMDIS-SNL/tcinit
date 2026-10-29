@@ -46,11 +46,12 @@ include = ["tcinit", "tcinit.*"]
 
 [tool.black]
 line-length = 88
-target-version = ["py310", "py311", "py312"]
+target-version = ["py312"]
 
 [tool.pytest.ini_options]
 norecursedirs = [".git", ".venv", "build", "dist", "__pycache__", "external"]
 addopts = "--strict-markers"
+pythonpath = ["."]
 markers = [
     "aurora: requires microsoft-aurora / torch",
     "neuralgcm: requires neuralgcm / jax",
