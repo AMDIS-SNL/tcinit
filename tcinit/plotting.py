@@ -584,9 +584,30 @@ def plot_snapshot(
     T300_anom = _anom(300.0)
     T500_anom = _anom(500.0)
     T700_anom = _anom(700.0)
-    _draw(axs[1, 0], T300_anom, "T 300 hPa anomaly", "RdBu_r", diverging=True, cb_label="K")
-    _draw(axs[1, 1], T500_anom, "T 500 hPa anomaly", "RdBu_r", diverging=True, cb_label="K")
-    _draw(axs[1, 2], T700_anom, "T 700 hPa anomaly", "RdBu_r", diverging=True, cb_label="K")
+    _draw(
+        axs[1, 0],
+        T300_anom,
+        "T 300 hPa anomaly",
+        "RdBu_r",
+        diverging=True,
+        cb_label="K",
+    )
+    _draw(
+        axs[1, 1],
+        T500_anom,
+        "T 500 hPa anomaly",
+        "RdBu_r",
+        diverging=True,
+        cb_label="K",
+    )
+    _draw(
+        axs[1, 2],
+        T700_anom,
+        "T 700 hPa anomaly",
+        "RdBu_r",
+        diverging=True,
+        cb_label="K",
+    )
 
     # ---- Row 2: q700, T200-500 avg anomaly, warm-core sum -----------------
     q700 = _fetch("q", 700.0)

@@ -497,11 +497,15 @@ class Snapshot:
         _add_scalar("loc_lon", float(loc[1]), units="degrees_east")
         _add_scalar("rdr", self.rdr if self.rdr is not None else np.nan, units="km")
         _add_scalar(
-            "rdr_from_wind", float(self.rdr_from_wind), units="km",
+            "rdr_from_wind",
+            float(self.rdr_from_wind),
+            units="km",
             long_name="rdr diagnostic from 10 m wind maximum",
         )
         _add_scalar(
-            "rdr_from_grad", float(self.rdr_from_grad), units="km",
+            "rdr_from_grad",
+            float(self.rdr_from_grad),
+            units="km",
             long_name="rdr diagnostic from max |grad MSLP|",
         )
         _add_scalar(

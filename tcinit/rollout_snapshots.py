@@ -38,7 +38,6 @@ from tcinit.diagnostics.mse import column_integrate_mse, mse_3d
 from tcinit.earth_util import EARTH_RADIUS_A, haversine_dist
 from tcinit.snapshot import Snapshot
 
-
 # ---------------------------------------------------------------------------
 # Warm-core criterion enum
 # ---------------------------------------------------------------------------
@@ -104,7 +103,9 @@ def _plate_carree_for_lons(lons: np.ndarray):
     import cartopy.crs as ccrs
 
     arr = np.asarray(lons, dtype=float)
-    if arr.size and (float(np.nanmax(arr)) > 180.0 or float(np.nanmax(arr) - np.nanmin(arr)) > 180.0):
+    if arr.size and (
+        float(np.nanmax(arr)) > 180.0 or float(np.nanmax(arr) - np.nanmin(arr)) > 180.0
+    ):
         return ccrs.PlateCarree(central_longitude=180.0)
     return ccrs.PlateCarree()
 
@@ -201,7 +202,12 @@ def snapshot_diagnostics(
     src_u = getattr(snap, "src_u", None)
     src_v = getattr(snap, "src_v", None)
     k850 = _level_index(snap.levels, 850.0)
-    if src_u is not None and src_v is not None and k850 is not None and lats is not None:
+    if (
+        src_u is not None
+        and src_v is not None
+        and k850 is not None
+        and lats is not None
+    ):
         vort = _vorticity_from_uv(src_u[k850], src_v[k850], lats, lons)
         out["vorticity850"] = vort
         # Cyclonic sign: + in NH, - in SH. Finding max of (sign * vort) picks
@@ -212,7 +218,8 @@ def snapshot_diagnostics(
         else:
             cyclonic_sign = 1.0 if float(np.nanmean(lats)) >= 0 else -1.0
         search = (
-            cyclonic_sign * vort if storm_mask is None
+            cyclonic_sign * vort
+            if storm_mask is None
             else np.where(storm_mask, cyclonic_sign * vort, np.nan)
         )
         if np.isfinite(search).any():
@@ -384,8 +391,11 @@ class RolloutSnapshots:
 
     @staticmethod
     def _pickle_filename(
-        root: Path, cyclone_id: str, start_time: _dt.datetime,
-        rollout_length: int, intervened: bool,
+        root: Path,
+        cyclone_id: str,
+        start_time: _dt.datetime,
+        rollout_length: int,
+        intervened: bool,
     ) -> Path:
         ts = start_time.strftime("%Y%m%d%H")
         suffix = "_intervened" if intervened else ""
@@ -397,8 +407,11 @@ class RolloutSnapshots:
         Returns the written path.
         """
         path = self._pickle_filename(
-            Path(root), self.cyclone_id, self.start_time,
-            self.rollout_length, self.intervened,
+            Path(root),
+            self.cyclone_id,
+            self.start_time,
+            self.rollout_length,
+            self.intervened,
         )
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("wb") as f:
@@ -418,7 +431,11 @@ class RolloutSnapshots:
         intervened: bool = False,
     ) -> "RolloutSnapshots":
         path = cls._pickle_filename(
-            Path(root), cyclone_id, start_time, rollout_length, intervened,
+            Path(root),
+            cyclone_id,
+            start_time,
+            rollout_length,
+            intervened,
         )
         if not path.exists():
             raise FileNotFoundError(path)
@@ -479,7 +496,9 @@ class RolloutSnapshots:
         rollout_dir = Path(rollout_dir)
         with (rollout_dir / "index.json").open() as f:
             index = json.load(f)
-        snaps = [Snapshot.from_netcdf(rollout_dir / fname) for fname in index["snapshots"]]
+        snaps = [
+            Snapshot.from_netcdf(rollout_dir / fname) for fname in index["snapshots"]
+        ]
         # Restore valid_times from index when the Snapshot NetCDF didn't carry one.
         for snap, iso in zip(snaps, index.get("valid_times", [])):
             if snap.valid_time is None and iso is not None:
@@ -549,56 +568,65 @@ class RolloutSnapshots:
             }
 
             if include_raw_units:
-                row.update({
-                    "VMAX_MPS": vmax_mps,
-                    "VMAX_KT": vmax_kt,
-                    "MSLP_PA": mslp_min_pa,
-                    "MSLP_HPA": mslp_min_hpa,
-                })
+                row.update(
+                    {
+                        "VMAX_MPS": vmax_mps,
+                        "VMAX_KT": vmax_kt,
+                        "MSLP_PA": mslp_min_pa,
+                        "MSLP_HPA": mslp_min_hpa,
+                    }
+                )
 
             if include_location_details:
                 mslp_loc = diag["mslp_min_loc"]
                 vort_loc = diag["vorticity850_max_loc"]
                 wspd_loc = diag["windspd10_max_loc"]
-                row.update({
-                    "mslp_min_lat": mslp_loc[0],
-                    "mslp_min_lon": mslp_loc[1],
-                    "mslp_min_val_pa": mslp_min_pa,
-                    "mslp_min_val_hpa": mslp_min_hpa,
-                    "vorticity850_max_lat": vort_loc[0],
-                    "vorticity850_max_lon": vort_loc[1],
-                    "windspd10_max_lat": wspd_loc[0],
-                    "windspd10_max_lon": wspd_loc[1],
-                    "windspd10_max_mps": vmax_mps,
-                    "windspd10_max_kt": vmax_kt,
-                })
+                row.update(
+                    {
+                        "mslp_min_lat": mslp_loc[0],
+                        "mslp_min_lon": mslp_loc[1],
+                        "mslp_min_val_pa": mslp_min_pa,
+                        "mslp_min_val_hpa": mslp_min_hpa,
+                        "vorticity850_max_lat": vort_loc[0],
+                        "vorticity850_max_lon": vort_loc[1],
+                        "windspd10_max_lat": wspd_loc[0],
+                        "windspd10_max_lon": wspd_loc[1],
+                        "windspd10_max_mps": vmax_mps,
+                        "windspd10_max_kt": vmax_kt,
+                    }
+                )
 
             if include_thermo:
-                row.update({
-                    "T300_env_mean": diag["T300_env_mean"],
-                    "T500_env_mean": diag["T500_env_mean"],
-                    "T700_env_mean": diag["T700_env_mean"],
-                    "T_avg_200_500_env_mean": diag["T_avg_200_500_env_mean"],
-                    "T300_anomaly": diag["T300_anomaly_max_val"],
-                    "T500_anomaly": diag["T500_anomaly_max_val"],
-                    "T700_anomaly": diag["T700_anomaly_max_val"],
-                    "T_avg_200_500_anomaly": diag["T_avg_200_500_anomaly_max_val"],
-                })
+                row.update(
+                    {
+                        "T300_env_mean": diag["T300_env_mean"],
+                        "T500_env_mean": diag["T500_env_mean"],
+                        "T700_env_mean": diag["T700_env_mean"],
+                        "T_avg_200_500_env_mean": diag["T_avg_200_500_env_mean"],
+                        "T300_anomaly": diag["T300_anomaly_max_val"],
+                        "T500_anomaly": diag["T500_anomaly_max_val"],
+                        "T700_anomaly": diag["T700_anomaly_max_val"],
+                        "T_avg_200_500_anomaly": diag["T_avg_200_500_anomaly_max_val"],
+                    }
+                )
 
             if include_detection:
                 hemi_sign = -1.0 if loc[0] is not None and loc[0] < 0 else 1.0
                 cyc_vort = hemi_sign * diag["vorticity850_max_val"]
                 row["meets_vorticity_threshold"] = (
                     bool(cyc_vort > vorticity_threshold)
-                    if np.isfinite(cyc_vort) else pd.NA
+                    if np.isfinite(cyc_vort)
+                    else pd.NA
                 )
                 row["meets_windspeed_threshold"] = (
                     bool(vmax_mps > windspeed_threshold)
-                    if np.isfinite(vmax_mps) else pd.NA
+                    if np.isfinite(vmax_mps)
+                    else pd.NA
                 )
                 row["meets_warm_core_threshold"] = (
                     bool(diag["warm_core_max"] > warm_core_threshold)
-                    if np.isfinite(diag["warm_core_max"]) else pd.NA
+                    if np.isfinite(diag["warm_core_max"])
+                    else pd.NA
                 )
                 vals = [
                     row["meets_vorticity_threshold"],
@@ -606,8 +634,7 @@ class RolloutSnapshots:
                     row["meets_warm_core_threshold"],
                 ]
                 row["storm_found"] = (
-                    pd.NA if any(v is pd.NA for v in vals)
-                    else bool(all(vals))
+                    pd.NA if any(v is pd.NA for v in vals) else bool(all(vals))
                 )
 
             rows.append(row)
@@ -656,24 +683,29 @@ class RolloutSnapshots:
         if model_df.empty:
             return model_df.copy()
 
-        model_df = model_df.rename(columns={
-            col: f"{model_prefix}{col}"
-            for col in model_df.columns if col != "datetime"
-        })
+        model_df = model_df.rename(
+            columns={
+                col: f"{model_prefix}{col}"
+                for col in model_df.columns
+                if col != "datetime"
+            }
+        )
 
         bt_df = best_track.df_best_tracks_history.copy()
         bt_cols = ["datetimes", "LAT_DEG", "LON_DEG", "VMAX", "MSLP"]
         if include_best_track_status and "STATUS" in bt_df.columns:
             bt_cols.append("STATUS")
         bt_cols = [c for c in bt_cols if c in bt_df.columns]
-        bt_df = bt_df[bt_cols].rename(columns={
-            "datetimes": "datetime",
-            "LAT_DEG": f"{best_track_prefix}LAT_DEG",
-            "LON_DEG": f"{best_track_prefix}LON_DEG",
-            "VMAX": f"{best_track_prefix}VMAX",
-            "MSLP": f"{best_track_prefix}MSLP",
-            "STATUS": f"{best_track_prefix}STATUS",
-        })
+        bt_df = bt_df[bt_cols].rename(
+            columns={
+                "datetimes": "datetime",
+                "LAT_DEG": f"{best_track_prefix}LAT_DEG",
+                "LON_DEG": f"{best_track_prefix}LON_DEG",
+                "VMAX": f"{best_track_prefix}VMAX",
+                "MSLP": f"{best_track_prefix}MSLP",
+                "STATUS": f"{best_track_prefix}STATUS",
+            }
+        )
 
         merged = model_df.merge(bt_df, on="datetime", how="left")
 
@@ -684,24 +716,27 @@ class RolloutSnapshots:
         if compute_position_distance_km and all(
             c in merged.columns for c in (aur_lat, aur_lon, bt_lat, bt_lon)
         ):
+
             def _pos_dist(row):
                 vals = (row[aur_lat], row[aur_lon], row[bt_lat], row[bt_lon])
                 if all(pd.notna(v) for v in vals):
                     return haversine_dist(
-                        float(row[aur_lat]), float(row[aur_lon]),
-                        float(row[bt_lat]), float(row[bt_lon]),
+                        float(row[aur_lat]),
+                        float(row[aur_lon]),
+                        float(row[bt_lat]),
+                        float(row[bt_lon]),
                     )
                 return float("nan")
+
             merged["position_error_km"] = merged.apply(_pos_dist, axis=1)
 
         for metric, label in (("VMAX", "dVMAX"), ("MSLP", "dMSLP")):
             m_col = f"{model_prefix}{metric}"
             b_col = f"{best_track_prefix}{metric}"
             if m_col in merged.columns and b_col in merged.columns:
-                merged[label] = (
-                    pd.to_numeric(merged[m_col], errors="coerce")
-                    - pd.to_numeric(merged[b_col], errors="coerce")
-                )
+                merged[label] = pd.to_numeric(
+                    merged[m_col], errors="coerce"
+                ) - pd.to_numeric(merged[b_col], errors="coerce")
 
         merged = merged.sort_values("datetime").reset_index(drop=True)
 
@@ -715,15 +750,25 @@ class RolloutSnapshots:
         return merged
 
     def _print_comparison(
-        self, df: pd.DataFrame, *, model_prefix: str, best_track_prefix: str,
+        self,
+        df: pd.DataFrame,
+        *,
+        model_prefix: str,
+        best_track_prefix: str,
     ) -> None:
         aur_vmax = f"{model_prefix}VMAX"
         aur_mslp = f"{model_prefix}MSLP"
         bt_vmax = f"{best_track_prefix}VMAX"
         bt_mslp = f"{best_track_prefix}MSLP"
         wanted = [
-            "datetime", aur_vmax, bt_vmax, "dVMAX",
-            aur_mslp, bt_mslp, "dMSLP", "position_error_km",
+            "datetime",
+            aur_vmax,
+            bt_vmax,
+            "dVMAX",
+            aur_mslp,
+            bt_mslp,
+            "dMSLP",
+            "position_error_km",
         ]
         cols = [c for c in wanted if c in df.columns]
         view = df[cols] if cols else df
@@ -747,8 +792,17 @@ class RolloutSnapshots:
         if "position_error_km" in df.columns:
             rows.append(("position_err", "km", *_stats(df["position_error_km"])))
         if rows:
-            n = int(df[[c for c in ("dVMAX", "dMSLP", "position_error_km")
-                        if c in df.columns]].dropna(how="all").shape[0])
+            n = int(
+                df[
+                    [
+                        c
+                        for c in ("dVMAX", "dMSLP", "position_error_km")
+                        if c in df.columns
+                    ]
+                ]
+                .dropna(how="all")
+                .shape[0]
+            )
             print(f"\nSummary (n={n}):")
             for label, unit, mean_v, max_v, rmse_v in rows:
                 print(
@@ -761,7 +815,8 @@ class RolloutSnapshots:
     # ------------------------------------------------------------------
 
     def mse_column_timeseries(
-        self, mask_attr: Optional[str] = "storm_mask",
+        self,
+        mask_attr: Optional[str] = "storm_mask",
     ) -> tuple:
         """Mean column MSE inside a per-snapshot boolean mask, over the rollout.
 
@@ -829,18 +884,22 @@ class RolloutSnapshots:
 
 
 def _has_bundled_fields(snap: Snapshot) -> bool:
-    return any(getattr(snap, f"src_{c}", None) is not None for c in ("t", "u", "v", "q", "z"))
+    return any(
+        getattr(snap, f"src_{c}", None) is not None for c in ("t", "u", "v", "q", "z")
+    )
 
 
 def _snap_bundled_to_dataset(snap: Snapshot):
     """Repackage snap.src_* back into an xr.Dataset so Snapshot.to_netcdf can bundle it."""
     import xarray as xr
+
     data_vars = {}
     for canon in ("t", "u", "v", "q", "z"):
         arr = getattr(snap, f"src_{canon}", None)
         if arr is not None:
             data_vars[canon] = xr.DataArray(
-                arr, dims=("level", "latitude", "longitude"),
+                arr,
+                dims=("level", "latitude", "longitude"),
             )
     return xr.Dataset(
         data_vars=data_vars,
@@ -923,7 +982,11 @@ def _plot_snapshot_page(
     pc = ccrs.PlateCarree()
     axes_proj = _plate_carree_for_lons(snap.box_lons)
     fig, axs = plt.subplots(
-        2, 2, figsize=(12, 12), sharex=True, sharey=True,
+        2,
+        2,
+        figsize=(12, 12),
+        sharex=True,
+        sharey=True,
         subplot_kw={"projection": axes_proj},
     )
     fig.subplots_adjust(wspace=0.24, hspace=0.18, right=0.9)
@@ -933,12 +996,11 @@ def _plot_snapshot_page(
     ymin = float(np.amin(snap.box_lats))
     ymax = float(np.amax(snap.box_lats))
 
-    mslp_hpa = (
-        diag["mslp"] / HPA_TO_PA if diag["mslp"] is not None else None
-    )
+    mslp_hpa = diag["mslp"] / HPA_TO_PA if diag["mslp"] is not None else None
     mslp_min_hpa = (
         diag["mslp_min_val"] / HPA_TO_PA
-        if np.isfinite(diag["mslp_min_val"]) else float("nan")
+        if np.isfinite(diag["mslp_min_val"])
+        else float("nan")
     )
 
     def _fmt(v, spec):
@@ -980,8 +1042,14 @@ def _plot_snapshot_page(
             ax.set_title(f"{title} unavailable")
         else:
             cf = ax.contourf(
-                snap.box_lons, snap.box_lats, field,
-                levels=21, vmin=vmin, vmax=vmax, cmap=cmap, transform=pc,
+                snap.box_lons,
+                snap.box_lats,
+                field,
+                levels=21,
+                vmin=vmin,
+                vmax=vmax,
+                cmap=cmap,
+                transform=pc,
             )
             cf.set_clim(vmin, vmax)
             plt.colorbar(cf, ax=ax, fraction=0.046, pad=0.04)
@@ -989,10 +1057,18 @@ def _plot_snapshot_page(
 
         loc = snap.loc
         if loc is not None and np.isfinite(loc[0]) and np.isfinite(loc[1]):
-            _plot_marker(ax, loc, "x", "storm loc", color="k", markersize=10, transform=pc)
+            _plot_marker(
+                ax, loc, "x", "storm loc", color="k", markersize=10, transform=pc
+            )
             _plot_radius_circle(
-                ax, loc[0], loc[1], snap.rdr if snap.rdr is not None else float("nan"),
-                color="k", linestyle="--", linewidth=1.2, label="rdr",
+                ax,
+                loc[0],
+                loc[1],
+                snap.rdr if snap.rdr is not None else float("nan"),
+                color="k",
+                linestyle="--",
+                linewidth=1.2,
+                label="rdr",
             )
 
     fig.suptitle(
@@ -1016,11 +1092,19 @@ def _plot_summary_page(
     t = [s.valid_time for s in kept]
     diags = [history.diagnostics(s) for s in kept]
     mslp_hpa = [
-        (d["mslp_min_val"] / HPA_TO_PA if np.isfinite(d["mslp_min_val"]) else float("nan"))
+        (
+            d["mslp_min_val"] / HPA_TO_PA
+            if np.isfinite(d["mslp_min_val"])
+            else float("nan")
+        )
         for d in diags
     ]
     wspd_kt = [
-        (d["windspd10_max_val"] * _MPS_TO_KT if np.isfinite(d["windspd10_max_val"]) else float("nan"))
+        (
+            d["windspd10_max_val"] * _MPS_TO_KT
+            if np.isfinite(d["windspd10_max_val"])
+            else float("nan")
+        )
         for d in diags
     ]
     vort = [d["vorticity850_max_val"] for d in diags]
@@ -1099,9 +1183,7 @@ def _plot_summary_page(
                     ax_top.set_xlim(right=x_cap)
 
     fig.autofmt_xdate()
-    fig.suptitle(
-        f"Rollout summary: {history.cyclone_id}, start {history.start_time}"
-    )
+    fig.suptitle(f"Rollout summary: {history.cyclone_id}, start {history.start_time}")
     pdf.savefig(fig, bbox_inches="tight")
     plt.close(fig)
 
@@ -1118,11 +1200,19 @@ def _plot_pressure_wind_page(
 
     diags = [history.diagnostics(s) for s in kept]
     aur_wspd_kt = [
-        (d["windspd10_max_val"] * _MPS_TO_KT if np.isfinite(d["windspd10_max_val"]) else float("nan"))
+        (
+            d["windspd10_max_val"] * _MPS_TO_KT
+            if np.isfinite(d["windspd10_max_val"])
+            else float("nan")
+        )
         for d in diags
     ]
     aur_mslp_hpa = [
-        (d["mslp_min_val"] / HPA_TO_PA if np.isfinite(d["mslp_min_val"]) else float("nan"))
+        (
+            d["mslp_min_val"] / HPA_TO_PA
+            if np.isfinite(d["mslp_min_val"])
+            else float("nan")
+        )
         for d in diags
     ]
 
@@ -1142,9 +1232,7 @@ def _plot_pressure_wind_page(
     ax.set_title("Pressure-wind relationship")
     ax.grid(True, linestyle=":", alpha=0.5)
     ax.legend(loc="best", fontsize=9)
-    fig.suptitle(
-        f"Pressure-wind: {history.cyclone_id}, start {history.start_time}"
-    )
+    fig.suptitle(f"Pressure-wind: {history.cyclone_id}, start {history.start_time}")
     pdf.savefig(fig, bbox_inches="tight")
     plt.close(fig)
 
@@ -1163,13 +1251,21 @@ def _plot_track_page(
     pc = ccrs.PlateCarree()
     # Pick axes projection based on the lons that will actually plot (model
     # locs + best-track longitudes).
-    all_lons_for_proj = [s.loc[1] for s in kept if s.loc is not None and np.isfinite(s.loc[1])]
+    all_lons_for_proj = [
+        s.loc[1] for s in kept if s.loc is not None and np.isfinite(s.loc[1])
+    ]
     if best_track is not None:
         bt_df = best_track.df_best_tracks_history
         if "LON_DEG" in bt_df.columns:
-            bt_lon_vals = pd.to_numeric(bt_df["LON_DEG"], errors="coerce").dropna().tolist()
+            bt_lon_vals = (
+                pd.to_numeric(bt_df["LON_DEG"], errors="coerce").dropna().tolist()
+            )
             all_lons_for_proj.extend(bt_lon_vals)
-    axes_proj = _plate_carree_for_lons(np.asarray(all_lons_for_proj)) if all_lons_for_proj else pc
+    axes_proj = (
+        _plate_carree_for_lons(np.asarray(all_lons_for_proj))
+        if all_lons_for_proj
+        else pc
+    )
     fig, ax = plt.subplots(figsize=(10, 8), subplot_kw={"projection": axes_proj})
 
     aur_lats, aur_lons = [], []
@@ -1199,8 +1295,12 @@ def _plot_track_page(
     if all_lats and all_lons:
         pad = 5.0
         ax.set_extent(
-            [min(all_lons) - pad, max(all_lons) + pad,
-             min(all_lats) - pad, max(all_lats) + pad],
+            [
+                min(all_lons) - pad,
+                max(all_lons) + pad,
+                min(all_lats) - pad,
+                max(all_lats) + pad,
+            ],
             crs=ccrs.PlateCarree(),
         )
     ax.coastlines(linewidth=0.5)
@@ -1209,15 +1309,57 @@ def _plot_track_page(
     gl.right_labels = False
 
     if bt_lats:
-        ax.plot(bt_lons, bt_lats, "--s", color="C3", markersize=4, linewidth=1.0,
-                label="best track (full)", transform=pc, zorder=3)
-        ax.plot(bt_lons[0], bt_lats[0], "^", color="C3", markersize=9, transform=pc, zorder=4)
-        ax.plot(bt_lons[-1], bt_lats[-1], "v", color="C3", markersize=9, transform=pc, zorder=4)
+        ax.plot(
+            bt_lons,
+            bt_lats,
+            "--s",
+            color="C3",
+            markersize=4,
+            linewidth=1.0,
+            label="best track (full)",
+            transform=pc,
+            zorder=3,
+        )
+        ax.plot(
+            bt_lons[0],
+            bt_lats[0],
+            "^",
+            color="C3",
+            markersize=9,
+            transform=pc,
+            zorder=4,
+        )
+        ax.plot(
+            bt_lons[-1],
+            bt_lats[-1],
+            "v",
+            color="C3",
+            markersize=9,
+            transform=pc,
+            zorder=4,
+        )
 
     if aur_lats:
-        ax.plot(aur_lons, aur_lats, "-o", color="C0", markersize=5, linewidth=1.5,
-                label="model track", transform=pc, zorder=5)
-        ax.plot(aur_lons[0], aur_lats[0], "*", color="C0", markersize=12, transform=pc, zorder=6)
+        ax.plot(
+            aur_lons,
+            aur_lats,
+            "-o",
+            color="C0",
+            markersize=5,
+            linewidth=1.5,
+            label="model track",
+            transform=pc,
+            zorder=5,
+        )
+        ax.plot(
+            aur_lons[0],
+            aur_lats[0],
+            "*",
+            color="C0",
+            markersize=12,
+            transform=pc,
+            zorder=6,
+        )
 
     ax.legend(loc="best", fontsize=9)
     fig.suptitle(
@@ -1236,7 +1378,9 @@ def _build_mse_figure(history: "RolloutSnapshots"):
 
     t_storm, v_storm = history.mse_column_timeseries("storm_mask")
     t_env, v_env = history.mse_column_timeseries("env_mask")
-    axs[0].plot(t_storm, v_storm / 1e9, "-o", color="C0", markersize=4, label="storm mask")
+    axs[0].plot(
+        t_storm, v_storm / 1e9, "-o", color="C0", markersize=4, label="storm mask"
+    )
     axs[0].plot(t_env, v_env / 1e9, "-s", color="C3", markersize=4, label="env mask")
     axs[0].set_ylabel("column MSE (GJ m$^{-2}$)")
     axs[0].legend(fontsize=9)
@@ -1254,12 +1398,18 @@ def _build_mse_figure(history: "RolloutSnapshots"):
         n = len(times_p)
         cmap = plt.cm.tab20b
         for i, prof in enumerate(profiles):
-            ax3.plot(prof / 1e3, levels_hpa, color=cmap(i / max(n - 1, 1)), linewidth=1.0)
-        sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=0, vmax=max(n - 1, 1)))
+            ax3.plot(
+                prof / 1e3, levels_hpa, color=cmap(i / max(n - 1, 1)), linewidth=1.0
+            )
+        sm = plt.cm.ScalarMappable(
+            cmap=cmap, norm=plt.Normalize(vmin=0, vmax=max(n - 1, 1))
+        )
         sm.set_array([])
         plt.colorbar(sm, ax=ax3, fraction=0.046, pad=0.04).set_label("rollout step")
     else:
-        ax3.text(0.5, 0.5, "MSE profile unavailable", transform=ax3.transAxes, ha="center")
+        ax3.text(
+            0.5, 0.5, "MSE profile unavailable", transform=ax3.transAxes, ha="center"
+        )
     ax3.invert_yaxis()
     ax3.set_xlabel("MSE (kJ kg$^{-1}$)")
     ax3.set_ylabel("pressure (hPa)")
@@ -1269,15 +1419,14 @@ def _build_mse_figure(history: "RolloutSnapshots"):
         ax.tick_params(axis="x", rotation=30)
         ax.set_xlabel("valid time")
 
-    fig.suptitle(
-        f"MSE diagnostics: {history.cyclone_id}, start {history.start_time}"
-    )
+    fig.suptitle(f"MSE diagnostics: {history.cyclone_id}, start {history.start_time}")
     fig.tight_layout()
     return fig
 
 
 def _plot_mse_page(history: "RolloutSnapshots", pdf) -> None:
     import matplotlib.pyplot as plt
+
     fig = _build_mse_figure(history)
     pdf.savefig(fig, bbox_inches="tight")
     plt.close(fig)
@@ -1310,8 +1459,12 @@ def plot_rollout_snapshots(
     diags = [history.diagnostics(s) for s in kept]
     vort_lim = _symmetric_lim([d["vorticity850"] for d in diags])
     mslp_vmin_pa, mslp_vmax_pa = _linear_lims([d["mslp"] for d in diags])
-    mslp_vmin_hpa = mslp_vmin_pa / HPA_TO_PA if np.isfinite(mslp_vmin_pa) else float("nan")
-    mslp_vmax_hpa = mslp_vmax_pa / HPA_TO_PA if np.isfinite(mslp_vmax_pa) else float("nan")
+    mslp_vmin_hpa = (
+        mslp_vmin_pa / HPA_TO_PA if np.isfinite(mslp_vmin_pa) else float("nan")
+    )
+    mslp_vmax_hpa = (
+        mslp_vmax_pa / HPA_TO_PA if np.isfinite(mslp_vmax_pa) else float("nan")
+    )
     wspd_vmin, wspd_vmax = _linear_lims([d["windspd10"] for d in diags])
     wspd_vmin = max(wspd_vmin, 0.0) if np.isfinite(wspd_vmin) else wspd_vmin
     wc_lim = _symmetric_lim([d["warm_core"] for d in diags])
@@ -1319,10 +1472,14 @@ def plot_rollout_snapshots(
     with PdfPages(str(filename)) as pdf:
         for snap in kept:
             _plot_snapshot_page(
-                history, snap, pdf,
+                history,
+                snap,
+                pdf,
                 vort_lim=vort_lim,
-                mslp_vmin_hpa=mslp_vmin_hpa, mslp_vmax_hpa=mslp_vmax_hpa,
-                wspd_vmin=wspd_vmin, wspd_vmax=wspd_vmax,
+                mslp_vmin_hpa=mslp_vmin_hpa,
+                mslp_vmax_hpa=mslp_vmax_hpa,
+                wspd_vmin=wspd_vmin,
+                wspd_vmax=wspd_vmax,
                 wc_lim=wc_lim,
             )
         _plot_summary_page(history, kept, pdf, best_track=best_track)
@@ -1341,6 +1498,7 @@ def plot_mse_diagnostics(
     page of the summary PDF. Call directly to produce a standalone figure.
     """
     import matplotlib.pyplot as plt
+
     fig = _build_mse_figure(history)
     if filename is not None:
         fig.savefig(str(filename), bbox_inches="tight", dpi=150)
@@ -1360,11 +1518,19 @@ def _run_series(hist: "RolloutSnapshots", kept: List[Snapshot]) -> dict:
     return {
         "t": [s.valid_time for s in kept],
         "mslp_hpa": [
-            (d["mslp_min_val"] / HPA_TO_PA if np.isfinite(d["mslp_min_val"]) else float("nan"))
+            (
+                d["mslp_min_val"] / HPA_TO_PA
+                if np.isfinite(d["mslp_min_val"])
+                else float("nan")
+            )
             for d in diags
         ],
         "wspd_kt": [
-            (d["windspd10_max_val"] * _MPS_TO_KT if np.isfinite(d["windspd10_max_val"]) else float("nan"))
+            (
+                d["windspd10_max_val"] * _MPS_TO_KT
+                if np.isfinite(d["windspd10_max_val"])
+                else float("nan")
+            )
             for d in diags
         ],
         "vort": [d["vorticity850_max_val"] for d in diags],
@@ -1379,7 +1545,11 @@ def _fit_ylim(ax, values, *, pad_frac=0.05, pad_min=1.0) -> None:
     if not finite:
         return
     lo, hi = min(finite), max(finite)
-    pad = max(abs(lo) * pad_frac, pad_min) if lo == hi else max((hi - lo) * pad_frac, pad_min)
+    pad = (
+        max(abs(lo) * pad_frac, pad_min)
+        if lo == hi
+        else max((hi - lo) * pad_frac, pad_min)
+    )
     ax.set_ylim(lo - pad, hi + pad)
 
 
@@ -1391,8 +1561,10 @@ _STYLES = {
 
 
 def _plot_summary_comparison_page(
-    ctrl: "RolloutSnapshots", kept_ctrl: List[Snapshot],
-    bogus: "RolloutSnapshots", kept_bogus: List[Snapshot],
+    ctrl: "RolloutSnapshots",
+    kept_ctrl: List[Snapshot],
+    bogus: "RolloutSnapshots",
+    kept_bogus: List[Snapshot],
     pdf,
     *,
     best_track=None,
@@ -1408,8 +1580,11 @@ def _plot_summary_comparison_page(
     # Top: MSLP (left, C0) + VMAX (right-twin, C3)
     for label, s, style in ((labels[0], sc, _STYLES[0]), (labels[1], sb, _STYLES[1])):
         ax_top.plot(
-            s["t"], s["mslp_hpa"], color="C0",
-            label=f"{label} MSLP", **style,
+            s["t"],
+            s["mslp_hpa"],
+            color="C0",
+            label=f"{label} MSLP",
+            **style,
         )
     ax_top.set_ylabel("MSLP (hPa)", color="C0")
     ax_top.tick_params(axis="y", labelcolor="C0")
@@ -1417,8 +1592,11 @@ def _plot_summary_comparison_page(
     ax_top_r = ax_top.twinx()
     for label, s, style in ((labels[0], sc, _STYLES[0]), (labels[1], sb, _STYLES[1])):
         ax_top_r.plot(
-            s["t"], s["wspd_kt"], color="C3",
-            label=f"{label} VMAX", **style,
+            s["t"],
+            s["wspd_kt"],
+            color="C3",
+            label=f"{label} VMAX",
+            **style,
         )
     ax_top_r.set_ylabel("10 m windspeed (kt)", color="C3")
     ax_top_r.tick_params(axis="y", labelcolor="C3")
@@ -1429,10 +1607,14 @@ def _plot_summary_comparison_page(
         if "datetimes" in bt_df.columns:
             if "MSLP" in bt_df.columns:
                 bt_mslp = pd.to_numeric(bt_df["MSLP"], errors="coerce")
-                ax_top.plot(bt_df["datetimes"], bt_mslp, ":", color="C0", label="BT MSLP")
+                ax_top.plot(
+                    bt_df["datetimes"], bt_mslp, ":", color="C0", label="BT MSLP"
+                )
             if "VMAX" in bt_df.columns:
                 bt_vmax = pd.to_numeric(bt_df["VMAX"], errors="coerce")
-                ax_top_r.plot(bt_df["datetimes"], bt_vmax, ":", color="C3", label="BT VMAX")
+                ax_top_r.plot(
+                    bt_df["datetimes"], bt_vmax, ":", color="C3", label="BT VMAX"
+                )
                 bt_vmax_vals = bt_vmax.dropna().tolist()
 
     ax_top.set_ylim(850, 1100)
@@ -1444,13 +1626,17 @@ def _plot_summary_comparison_page(
 
     # Bottom: vort850 (left, C2) + warm_core (right-twin, C1)
     for label, s, style in ((labels[0], sc, _STYLES[0]), (labels[1], sb, _STYLES[1])):
-        ax_bot.plot(s["t"], s["vort"], color="C2", label=f"{label} vort850 max", **style)
+        ax_bot.plot(
+            s["t"], s["vort"], color="C2", label=f"{label} vort850 max", **style
+        )
     ax_bot.set_ylabel("vorticity (s$^{-1}$)", color="C2")
     ax_bot.tick_params(axis="y", labelcolor="C2")
 
     ax_bot_r = ax_bot.twinx()
     for label, s, style in ((labels[0], sc, _STYLES[0]), (labels[1], sb, _STYLES[1])):
-        ax_bot_r.plot(s["t"], s["wc_max"], color="C1", label=f"{label} warm_core max", **style)
+        ax_bot_r.plot(
+            s["t"], s["wc_max"], color="C1", label=f"{label} warm_core max", **style
+        )
     ax_bot_r.set_ylabel("warm_core max (K)", color="C1")
     ax_bot_r.tick_params(axis="y", labelcolor="C1")
     _fit_ylim(ax_bot, list(sc["vort"]) + list(sb["vort"]), pad_min=1e-6)
@@ -1484,8 +1670,10 @@ def _plot_summary_comparison_page(
 
 
 def _plot_pressure_wind_comparison_page(
-    ctrl: "RolloutSnapshots", kept_ctrl: List[Snapshot],
-    bogus: "RolloutSnapshots", kept_bogus: List[Snapshot],
+    ctrl: "RolloutSnapshots",
+    kept_ctrl: List[Snapshot],
+    bogus: "RolloutSnapshots",
+    kept_bogus: List[Snapshot],
     pdf,
     *,
     best_track=None,
@@ -1497,10 +1685,24 @@ def _plot_pressure_wind_comparison_page(
     sc = _run_series(ctrl, kept_ctrl)
     sb = _run_series(bogus, kept_bogus)
     fig, ax = plt.subplots(figsize=(8, 8))
-    ax.plot(sc["wspd_kt"], sc["mslp_hpa"], marker="o", linestyle="None",
-            color="C0", label=labels[0], alpha=0.85)
-    ax.plot(sb["wspd_kt"], sb["mslp_hpa"], marker="^", linestyle="None",
-            color="C1", label=labels[1], alpha=0.85)
+    ax.plot(
+        sc["wspd_kt"],
+        sc["mslp_hpa"],
+        marker="o",
+        linestyle="None",
+        color="C0",
+        label=labels[0],
+        alpha=0.85,
+    )
+    ax.plot(
+        sb["wspd_kt"],
+        sb["mslp_hpa"],
+        marker="^",
+        linestyle="None",
+        color="C1",
+        label=labels[1],
+        alpha=0.85,
+    )
     if best_track is not None:
         bt_df = best_track.df_best_tracks_history
         if "VMAX" in bt_df.columns and "MSLP" in bt_df.columns:
@@ -1522,8 +1724,10 @@ def _plot_pressure_wind_comparison_page(
 
 
 def _plot_track_comparison_page(
-    ctrl: "RolloutSnapshots", kept_ctrl: List[Snapshot],
-    bogus: "RolloutSnapshots", kept_bogus: List[Snapshot],
+    ctrl: "RolloutSnapshots",
+    kept_ctrl: List[Snapshot],
+    bogus: "RolloutSnapshots",
+    kept_bogus: List[Snapshot],
     pdf,
     *,
     best_track=None,
@@ -1561,8 +1765,12 @@ def _plot_track_comparison_page(
     if all_lats and all_lons:
         pad = 5.0
         ax.set_extent(
-            [min(all_lons) - pad, max(all_lons) + pad,
-             min(all_lats) - pad, max(all_lats) + pad],
+            [
+                min(all_lons) - pad,
+                max(all_lons) + pad,
+                min(all_lats) - pad,
+                max(all_lats) + pad,
+            ],
             crs=ccrs.PlateCarree(),
         )
     ax.coastlines(linewidth=0.5)
@@ -1571,18 +1779,77 @@ def _plot_track_comparison_page(
     gl.right_labels = False
 
     if bt_lats:
-        ax.plot(bt_lons, bt_lats, ":s", color="C3", markersize=4, linewidth=1.0,
-                label="best track (full)", transform=pc, zorder=3)
-        ax.plot(bt_lons[0], bt_lats[0], "^", color="C3", markersize=9, transform=pc, zorder=4)
-        ax.plot(bt_lons[-1], bt_lats[-1], "v", color="C3", markersize=9, transform=pc, zorder=4)
+        ax.plot(
+            bt_lons,
+            bt_lats,
+            ":s",
+            color="C3",
+            markersize=4,
+            linewidth=1.0,
+            label="best track (full)",
+            transform=pc,
+            zorder=3,
+        )
+        ax.plot(
+            bt_lons[0],
+            bt_lats[0],
+            "^",
+            color="C3",
+            markersize=9,
+            transform=pc,
+            zorder=4,
+        )
+        ax.plot(
+            bt_lons[-1],
+            bt_lats[-1],
+            "v",
+            color="C3",
+            markersize=9,
+            transform=pc,
+            zorder=4,
+        )
     if sc["lons"]:
-        ax.plot(sc["lons"], sc["lats"], "-o", color="C0", markersize=5, linewidth=1.5,
-                label=f"{labels[0]} track", transform=pc, zorder=5)
-        ax.plot(sc["lons"][0], sc["lats"][0], "*", color="C0", markersize=12, transform=pc, zorder=6)
+        ax.plot(
+            sc["lons"],
+            sc["lats"],
+            "-o",
+            color="C0",
+            markersize=5,
+            linewidth=1.5,
+            label=f"{labels[0]} track",
+            transform=pc,
+            zorder=5,
+        )
+        ax.plot(
+            sc["lons"][0],
+            sc["lats"][0],
+            "*",
+            color="C0",
+            markersize=12,
+            transform=pc,
+            zorder=6,
+        )
     if sb["lons"]:
-        ax.plot(sb["lons"], sb["lats"], "--^", color="C1", markersize=5, linewidth=1.5,
-                label=f"{labels[1]} track", transform=pc, zorder=5)
-        ax.plot(sb["lons"][0], sb["lats"][0], "*", color="C1", markersize=12, transform=pc, zorder=6)
+        ax.plot(
+            sb["lons"],
+            sb["lats"],
+            "--^",
+            color="C1",
+            markersize=5,
+            linewidth=1.5,
+            label=f"{labels[1]} track",
+            transform=pc,
+            zorder=5,
+        )
+        ax.plot(
+            sb["lons"][0],
+            sb["lats"][0],
+            "*",
+            color="C1",
+            markersize=12,
+            transform=pc,
+            zorder=6,
+        )
     ax.legend(loc="best", fontsize=9)
     fig.suptitle(
         f"Storm track: {ctrl.cyclone_id}  "
@@ -1620,9 +1887,11 @@ def _build_mse_comparison_figure(
     for i, (label, hist) in enumerate(((labels[0], ctrl), (labels[1], bogus))):
         t_a, v_a = hist.mse_anomaly_timeseries()
         axs[0, 1].plot(
-            t_a, v_a / 1e9,
+            t_a,
+            v_a / 1e9,
             color=("C2" if i == 0 else "C4"),
-            label=label, **_STYLES[i],
+            label=label,
+            **_STYLES[i],
         )
     axs[0, 1].axhline(0.0, color="k", linewidth=0.5, linestyle="--")
     axs[0, 1].set_ylabel(r"$\Delta$MSE storm-env (GJ m$^{-2}$)")
@@ -1638,12 +1907,18 @@ def _build_mse_comparison_figure(
             n = len(times_p)
             cmap = plt.cm.tab20b
             for i, prof in enumerate(profiles):
-                ax.plot(prof / 1e3, levels_hpa, color=cmap(i / max(n - 1, 1)), linewidth=1.0)
-            sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=0, vmax=max(n - 1, 1)))
+                ax.plot(
+                    prof / 1e3, levels_hpa, color=cmap(i / max(n - 1, 1)), linewidth=1.0
+                )
+            sm = plt.cm.ScalarMappable(
+                cmap=cmap, norm=plt.Normalize(vmin=0, vmax=max(n - 1, 1))
+            )
             sm.set_array([])
             plt.colorbar(sm, ax=ax, fraction=0.046, pad=0.04).set_label("rollout step")
         else:
-            ax.text(0.5, 0.5, "MSE profile unavailable", transform=ax.transAxes, ha="center")
+            ax.text(
+                0.5, 0.5, "MSE profile unavailable", transform=ax.transAxes, ha="center"
+            )
         ax.invert_yaxis()
         ax.set_xlabel("MSE (kJ kg$^{-1}$)")
         ax.set_ylabel("pressure (hPa)")
@@ -1665,6 +1940,7 @@ def _plot_mse_comparison_page(
     labels: tuple,
 ) -> None:
     import matplotlib.pyplot as plt
+
     fig = _build_mse_comparison_figure(ctrl, bogus, labels=labels)
     pdf.savefig(fig, bbox_inches="tight")
     plt.close(fig)
@@ -1711,15 +1987,30 @@ def plot_rollout_comparison(
 
     with PdfPages(str(filename)) as pdf:
         _plot_summary_comparison_page(
-            ctrl, kept_ctrl, bogus, kept_bogus, pdf,
-            best_track=best_track, labels=labels,
+            ctrl,
+            kept_ctrl,
+            bogus,
+            kept_bogus,
+            pdf,
+            best_track=best_track,
+            labels=labels,
         )
         _plot_pressure_wind_comparison_page(
-            ctrl, kept_ctrl, bogus, kept_bogus, pdf,
-            best_track=best_track, labels=labels,
+            ctrl,
+            kept_ctrl,
+            bogus,
+            kept_bogus,
+            pdf,
+            best_track=best_track,
+            labels=labels,
         )
         _plot_track_comparison_page(
-            ctrl, kept_ctrl, bogus, kept_bogus, pdf,
-            best_track=best_track, labels=labels,
+            ctrl,
+            kept_ctrl,
+            bogus,
+            kept_bogus,
+            pdf,
+            best_track=best_track,
+            labels=labels,
         )
         _plot_mse_comparison_page(ctrl, bogus, pdf, labels=labels)
