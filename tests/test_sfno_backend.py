@@ -394,6 +394,10 @@ def test_write_back_with_torch_tensor_preserves_dtype_and_device():
     bt = make_best_track(datetime(2020, 9, 1, 6), lat_deg=lat_c, lon_deg=lon_c)
     bv = BogusVortex(snap, bt, datetime(2020, 9, 1, 6)).build()
     ds_mod = sfno_backend.apply(ds, bv)
+    msl_ch = sfno_channel_index(coords["variable"], "msl")
+    # as_tensor shares memory with x_np, so keep an independent copy to
+    # compare against after the in-place write.
+    msl_before = x[0, 0, 0, msl_ch].clone()
     sfno_backend.write_back(
         x,
         coords,
@@ -403,7 +407,4 @@ def test_write_back_with_torch_tensor_preserves_dtype_and_device():
     )
     assert x.dtype == torch.float32
     # In-place mutation: x is the same tensor we passed in, now vortex-imprinted.
-    msl_ch = sfno_channel_index(coords["variable"], "msl")
-    assert not torch.allclose(
-        x[0, 0, 0, msl_ch], torch.as_tensor(x_np[0, 0, 0, msl_ch])
-    )
+    assert not torch.allclose(x[0, 0, 0, msl_ch], msl_before)

@@ -131,7 +131,7 @@ def plot_bogus(
 def _add_map_labels(ax, show_bottom: bool, show_left: bool):
     """Attach lightweight lat/lon gridline labels to a cartopy axes."""
     import cartopy.crs as ccrs
-    from cartopy.mpl.gridliner import LONGITUDE_FORMATTER, LATITUDE_FORMATTER
+    from cartopy.mpl.ticker import LatitudeFormatter, LongitudeFormatter
 
     gl = ax.gridlines(
         crs=ccrs.PlateCarree(),
@@ -145,8 +145,8 @@ def _add_map_labels(ax, show_bottom: bool, show_left: bool):
     gl.right_labels = False
     gl.bottom_labels = show_bottom
     gl.left_labels = show_left
-    gl.xformatter = LONGITUDE_FORMATTER
-    gl.yformatter = LATITUDE_FORMATTER
+    gl.xformatter = LongitudeFormatter()
+    gl.yformatter = LatitudeFormatter()
     gl.xlabel_style = {"size": 9}
     gl.ylabel_style = {"size": 9}
     return gl
