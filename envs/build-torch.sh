@@ -3,7 +3,8 @@
 # backends on CUDA 12. See envs/README.md for the host and modules this was
 # built against.
 #
-# Usage (from anywhere, with the modules in envs/README.md loaded):
+# Usage (from anywhere, with the modules in envs/README.md loaded, so
+# python3 is 3.12; or set PYTHON=/path/to/python3.12):
 #   envs/build-torch.sh
 #   VENV=/other/place/torch-venv TORCH_CUDA=cu129 envs/build-torch.sh
 set -euo pipefail
@@ -16,6 +17,14 @@ export PIP_CACHE_DIR="${PIP_CACHE_DIR:-$ENV_ROOT/pip-cache}"
 TORCH_CUDA="${TORCH_CUDA:-cu126}"
 MAKANI_REV="b38fcb2799d7dbc146fa60459f3f9823394a8bf1"  # pin used by earth2studio
 
+PYTHON="${PYTHON:-python3}"
+if ! "$PYTHON" -c 'import sys; sys.exit(sys.version_info < (3, 11))' 2>/dev/null; then
+    echo "error: $PYTHON is $("$PYTHON" --version 2>&1) at $(command -v "$PYTHON");" \
+         "need Python >= 3.11. Load the modules in envs/README.md" \
+         "(aue/python/3.12.4) or set PYTHON=/path/to/python3.12" >&2
+    exit 1
+fi
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 if [[ -e "$VENV" ]]; then
@@ -23,7 +32,7 @@ if [[ -e "$VENV" ]]; then
     exit 1
 fi
 
-python3 -m venv "$VENV"
+"$PYTHON" -m venv "$VENV"
 # shellcheck disable=SC1091
 . "$VENV/bin/activate"
 pip install --upgrade pip

@@ -3,7 +3,8 @@
 # GenCast / WN2), HICCUP backends on CUDA 12. See envs/README.md for the host
 # and modules this was built against.
 #
-# Usage (from anywhere, with the modules in envs/README.md loaded):
+# Usage (from anywhere, with the modules in envs/README.md loaded, so
+# python3 is 3.12; or set PYTHON=/path/to/python3.12):
 #   envs/build-jax.sh
 #   VENV=/other/place/jax-venv envs/build-jax.sh
 set -euo pipefail
@@ -16,6 +17,14 @@ export PIP_CACHE_DIR="${PIP_CACHE_DIR:-$ENV_ROOT/pip-cache}"
 # Commit of the external/weathernext clone the backends were written against.
 WEATHERNEXT_REV="f2f2c5117d2f864e2d5e7c2f9f220db5e1049dd3"
 
+PYTHON="${PYTHON:-python3}"
+if ! "$PYTHON" -c 'import sys; sys.exit(sys.version_info < (3, 11))' 2>/dev/null; then
+    echo "error: $PYTHON is $("$PYTHON" --version 2>&1) at $(command -v "$PYTHON");" \
+         "need Python >= 3.11. Load the modules in envs/README.md" \
+         "(aue/python/3.12.4) or set PYTHON=/path/to/python3.12" >&2
+    exit 1
+fi
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 if [[ -e "$VENV" ]]; then
@@ -23,7 +32,7 @@ if [[ -e "$VENV" ]]; then
     exit 1
 fi
 
-python3 -m venv "$VENV"
+"$PYTHON" -m venv "$VENV"
 # shellcheck disable=SC1091
 . "$VENV/bin/activate"
 pip install --upgrade pip
