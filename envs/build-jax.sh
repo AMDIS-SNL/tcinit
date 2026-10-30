@@ -50,4 +50,4 @@ if [[ ":${LD_LIBRARY_PATH:-}:" == *cuda* ]]; then
     echo "note: LD_LIBRARY_PATH contains CUDA module paths; if JAX reports" \
          "cuDNN/cuBLAS version errors, see envs/README.md" >&2
 fi
-echo "built $VENV; generate a lock file as described in envs/README.md"
+echo "built $VENV; then run pytest -q and envs/lock.sh jax"

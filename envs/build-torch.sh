@@ -49,4 +49,4 @@ print("torch", torch.__version__, "cuda", torch.version.cuda,
       "cudnn", torch.backends.cudnn.version(),
       "gpu available", torch.cuda.is_available())
 EOF
-echo "built $VENV; generate a lock file as described in envs/README.md"
+echo "built $VENV; then run pytest -q and envs/lock.sh torch"

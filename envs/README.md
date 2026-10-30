@@ -90,17 +90,12 @@ After the build, on a GPU node with `pytest -q` passing:
 
 ```sh
 . /fgs/$USER/causaltc/torch-venv/bin/activate
-{
-  echo "# torch-venv lock, $(date +%F), $(hostname)"
-  echo "# $(python --version)"
-  echo "# GPU: $(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader | head -1) (x$(nvidia-smi -L | wc -l))"
-  echo "# $(python -c 'import torch; print("torch", torch.__version__, "cuda", torch.version.cuda, "cudnn", torch.backends.cudnn.version())' 2>/dev/null)"
-  echo "--extra-index-url https://download.pytorch.org/whl/cu126"
-  pip freeze --exclude-editable
-} > envs/torch-cu126.lock.txt
+envs/lock.sh torch          # writes envs/torch-cu126.lock.txt
 ```
 
-Check that the makani line records its git commit, then commit the file.
+The script records host, GPU, driver, Python and torch/CUDA/cuDNN
+versions as header comments, adds the torch wheel index line, and
+checks that makani kept its git source. Commit the file.
 
 Reproduce from the lock:
 
@@ -170,21 +165,13 @@ when running a torch model in the same job, set
 
 ### Lock file
 
-Same procedure as `torch-venv`, without the torch index line:
-
 ```sh
 . /fgs/$USER/causaltc/jax-venv/bin/activate
-{
-  echo "# jax-venv lock, $(date +%F), $(hostname)"
-  echo "# $(python --version)"
-  echo "# GPU: $(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader | head -1) (x$(nvidia-smi -L | wc -l))"
-  echo "# $(python -c 'import jax, jaxlib; print("jax", jax.__version__, "jaxlib", jaxlib.__version__)')"
-  pip freeze --exclude-editable
-} > envs/jax-cuda12.lock.txt
+envs/lock.sh jax            # writes envs/jax-cuda12.lock.txt
 ```
 
-Check that the `weathernext` and `gdm-xarray-jax` lines record their git
-commits.
+The script checks that `weathernext` and `gdm-xarray-jax` kept their git
+sources.
 
 ## Checking an environment
 
