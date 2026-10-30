@@ -127,7 +127,10 @@ or `~/.cache/earth2studio`, it can be deleted to free quota.
 
 ## jax-venv
 
-Same host and modules as `torch-venv`. Build:
+Same host and modules as `torch-venv`. Built 2026-10-30 and verified
+with jax 0.12.0.1 seeing all 4 A100s as `CudaDevice`s, `pip check`
+clean, and `pytest -q` at 77 passed / 2 skipped (the torch-only Aurora
+and SFNO tests). Build:
 
 ```sh
 envs/build-jax.sh                                    # creates /fgs/$USER/causaltc/jax-venv
