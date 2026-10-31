@@ -199,13 +199,13 @@ def test_extract_canonicalises_names_and_slices_box(tmp_path):
         box_center=(15.0, 130.0),
         box_size=5.0,
     )
-    # Canonical short names present.
-    for name in ("t", "u", "v", "q", "z", "msl", "2t", "10u", "10v"):
+    # Canonical short names present, plus sp (HICCUP's source for PS).
+    for name in ("t", "u", "v", "q", "z", "msl", "2t", "10u", "10v", "sp"):
         assert name in box_ds.data_vars, f"missing {name}"
 
-    # HICCUP-only fields excluded from extract (they stay in the source file
-    # and pass through write_back).
-    for excluded in ("o3", "clwc", "ciwc", "sp", "skt", "sst", "siconc"):
+    # Other HICCUP-only fields excluded from extract (they stay in the source
+    # file and pass through write_back).
+    for excluded in ("o3", "clwc", "ciwc", "skt", "sst", "siconc"):
         assert excluded not in box_ds.data_vars
 
     # ``z`` in the extract is the ATMOSPHERIC z (3-D with level), not the
@@ -269,13 +269,13 @@ def test_write_back_produces_new_file_and_preserves_everything_else(tmp_path):
         # HICCUP-only vars: bit-identical to source.
         for name in ("o3", "clwc", "ciwc"):
             np.testing.assert_allclose(atm_new[name].values, atm_src[name].values)
-        for name in ("sp", "skt", "z", "sst", "siconc"):
+        for name in ("skt", "z", "sst", "siconc"):
             np.testing.assert_allclose(sfc_new[name].values, sfc_src[name].values)
         # K&C-touched atmos vars: differ from source (vortex was applied).
         for name in ("t", "u", "v"):
             assert not np.allclose(atm_new[name].values, atm_src[name].values)
         # K&C-touched surface vars: differ from source.
-        for name in ("t2m", "msl", "u10", "v10"):
+        for name in ("t2m", "msl", "u10", "v10", "sp"):
             assert not np.allclose(sfc_new[name].values, sfc_src[name].values)
 
         # Cells strictly outside the box are unchanged.
@@ -415,3 +415,89 @@ def test_extract_accepts_legacy_coord_names(tmp_path):
     )
     assert "level" in box_ds.dims
     assert "t" in box_ds.data_vars
+
+
+def _bogus_files(tmp_path, *, order=("atm", "sfc")):
+    """Write synthetic ERA5 files, apply a vortex, write both bogus files."""
+    paths = {"atm": tmp_path / "era5_atm.nc", "sfc": tmp_path / "era5_sfc.nc"}
+    _write_era5_atm_file(paths["atm"])
+    _write_era5_sfc_file(paths["sfc"])
+    box_ds = hiccup_backend.extract_snapshot_dataset(
+        [str(paths[k]) for k in order], box_center=(15.0, 130.0), box_size=5.0
+    )
+    bv = _build_bv_from_box(box_ds)
+    mod = hiccup_backend.apply(box_ds, bv)
+    out = {
+        k: hiccup_backend.write_back(
+            str(paths[k]),
+            mod,
+            box_lats=box_ds["latitude"].values,
+            box_lons=box_ds["longitude"].values,
+        )
+        for k in paths
+    }
+    return paths, out, box_ds, mod
+
+
+def test_apply_carries_msl_drop_into_sp(tmp_path):
+    """HICCUP builds PS from sp, so sp must drop where msl does."""
+    _, _, box_ds, mod = _bogus_files(tmp_path)
+    ratio_before = box_ds["sp"] / box_ds["msl"]
+    ratio_after = mod["sp"] / mod["msl"]
+    np.testing.assert_allclose(ratio_after.values, ratio_before.values, rtol=1e-6)
+    d_msl = (mod["msl"] - box_ds["msl"]).values
+    d_sp = (mod["sp"] - box_ds["sp"]).values
+    assert d_msl.min() < -1000.0  # the vortex deepened the low by > 10 hPa
+    np.testing.assert_allclose(d_sp, d_msl, atol=100.0)  # sp ~ msl over ocean
+
+
+def test_apply_blends_sp_directly_without_msl(canonical_ds):
+    ds = canonical_ds.drop_vars("msl").assign(sp=canonical_ds["msl"])
+    bv = _build_bv_from_box(canonical_ds)
+    mod = hiccup_backend.apply(ds, bv)
+    expected = (1.0 - bv.blend) * ds["sp"].values + bv.blend * bv.p_sfc_bogus_pa
+    np.testing.assert_allclose(mod["sp"].values, expected)
+
+
+def test_write_back_lowers_sp_in_surface_file(tmp_path):
+    paths, out, _, _ = _bogus_files(tmp_path)
+    src = xr.open_dataset(str(paths["sfc"]))
+    new = xr.open_dataset(out["sfc"])
+    try:
+        assert float(new["sp"].min()) < float(src["sp"].min()) - 1000.0
+    finally:
+        src.close()
+        new.close()
+
+
+def test_write_back_keeps_finite_fill_value(tmp_path):
+    """CDS files carry a finite _FillValue; a NaN one makes HICCUP copy files."""
+    sfc = tmp_path / "era5_sfc.nc"
+    _write_era5_sfc_file(sfc)
+    ds = xr.open_dataset(sfc).load()
+    ds.close()
+    filled = tmp_path / "era5_sfc_filled.nc"
+    ds.to_netcdf(filled, encoding={v: {"_FillValue": 1e36} for v in ds.data_vars})
+    box_ds = hiccup_backend.extract_snapshot_dataset(
+        [str(filled)], box_center=(15.0, 130.0), box_size=5.0
+    )
+    mod = box_ds.copy(deep=True)
+    mod["msl"] = mod["msl"] - 500.0
+    mod["sp"] = mod["sp"] - 500.0
+    out = hiccup_backend.write_back(
+        str(filled),
+        mod,
+        box_lats=box_ds["latitude"].values,
+        box_lons=box_ds["longitude"].values,
+    )
+    new = xr.open_dataset(out)
+    try:
+        for name in ("msl", "sp", "t2m"):
+            assert new[name].encoding["_FillValue"] == pytest.approx(1e36)
+    finally:
+        new.close()
+
+
+def test_extract_keeps_3d_z_when_surface_file_comes_first(tmp_path):
+    _, _, box_ds, _ = _bogus_files(tmp_path, order=("sfc", "atm"))
+    assert "level" in box_ds["z"].dims

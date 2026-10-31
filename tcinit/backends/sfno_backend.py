@@ -4,7 +4,9 @@ canonical xarray schema.
 SFNO's native input is a torch.Tensor with shape
 ``(batch, time, lead_time, variable, lat, lon)`` alongside an
 ``earth2studio.utils.type.CoordSystem`` (an OrderedDict keyed by those six
-names). All 73 fields are stacked on the single ``variable`` axis with
+names). The 5-D form without ``batch`` -- what earth2studio's
+``fetch_data`` returns, and what a model iterator yields for a 5-D input --
+is accepted too. All 73 fields are stacked on the single ``variable`` axis with
 per-level names — e.g. ``t500`` for temperature at 500 hPa, ``u10m`` for the
 10 m zonal wind. See ``earth2studio/models/px/sfno.py`` for the full list.
 
@@ -17,11 +19,13 @@ This module provides:
 - :func:`write_back` — paste a modified canonical Dataset back into the SFNO
   tensor across every ``(batch, time, lead_time)`` slot.
 
-Untouched SFNO channels (``u100m``, ``v100m``, ``sp``, ``tcwv``) are neither
-extracted nor written back — leaving them stale in the storm core is a mild
-inconsistency that matches the Aurora prototype's convention of leaving
-``tcwv`` alone. Add a bespoke reconciliation step later if downstream tests
-show it matters.
+Surface pressure ``sp`` is carried along with the canonical fields: it is
+extracted, :func:`apply` scales it with the MSLP change (see
+:func:`tcinit.backends.surface_pressure.follow_msl`), and :func:`write_back`
+writes it, so SFNO doesn't see a lowered ``msl`` over an unchanged ``sp``.
+The remaining channels (``u100m``, ``v100m``, ``tcwv``) are neither extracted
+nor written back; leaving them stale in the storm core matches the Aurora
+prototype's convention of leaving ``tcwv`` alone.
 
 Torch is imported lazily inside the tensor-handling helpers so this module
 can be imported (and tested) without earth2studio/torch installed, as long
@@ -35,6 +39,7 @@ from typing import Mapping, Optional, Tuple
 import numpy as np
 import xarray as xr
 
+from tcinit.backends.surface_pressure import follow_msl
 from tcinit.naming import (
     ATMOS_VARS,
     SFNO_LEVELS_HPA,
@@ -43,18 +48,25 @@ from tcinit.naming import (
 )
 from tcinit.ideal_tc_vortex import BogusVortex
 
+# SFNO channel for surface pressure; not a tcinit canonical name.
+SP_CHANNEL = "sp"
+
+
+def _sp_channel_index(variables) -> int | None:
+    matches = np.where(np.asarray(variables) == SP_CHANNEL)[0]
+    return int(matches[0]) if matches.size else None
+
 
 def _tensor_to_numpy(t) -> np.ndarray:
     """Convert a torch tensor (or numpy array) to a CPU numpy array.
 
-    Torch is imported lazily. bfloat16 tensors are upcast to float32 first
-    since numpy has no bfloat16 dtype.
+    bfloat16 tensors are upcast to float32 first since numpy has no bfloat16
+    dtype. Callers should slice before converting: this copies whatever it
+    is given off the device.
     """
     if hasattr(t, "detach"):
-        import torch
-
         t = t.detach().cpu()
-        if t.dtype == torch.bfloat16:
+        if str(t.dtype) == "torch.bfloat16":
             t = t.float()
         return t.numpy()
     return np.asarray(t)
@@ -97,9 +109,13 @@ def extract_snapshot_dataset(
 ) -> xr.Dataset:
     """Extract a lat/lon box from an SFNO ``(tensor, CoordSystem)`` pair.
 
+    Only the box is copied off the device: the sample is indexed and the
+    lat/lon box sliced on the tensor first.
+
     Args:
         x: SFNO input tensor (torch or numpy) with shape
-            ``(batch, time, lead_time, variable, lat, lon)`` matching ``coords``.
+            ``(batch, time, lead_time, variable, lat, lon)`` matching ``coords``,
+            or the 5-D ``(time, lead_time, variable, lat, lon)`` form.
         coords: earth2studio CoordSystem-like mapping with ``"variable"``,
             ``"lat"``, ``"lon"`` keys at minimum (and typically ``"batch"``,
             ``"time"``, ``"lead_time"`` as well).
@@ -107,14 +123,15 @@ def extract_snapshot_dataset(
             ``coords["lon"]`` (typically ``[0, 360)`` for SFNO).
         box_size: half-width of the extracted box (deg), inclusive both sides.
         batch_idx, time_idx, lead_time_idx: indices to sample along those dims
-            (default 0 for a single-sample input).
+            (default 0 for a single-sample input). ``batch_idx`` is ignored
+            for a 5-D tensor.
 
     Returns:
         Dataset with dims ``(level, latitude, longitude)``, canonical short
         variable names, and levels equal to the subset of
         :data:`tcinit.naming.SFNO_LEVELS_HPA` present in the tensor across
-        every atmospheric canonical. Untouched SFNO channels (100m wind,
-        ``sp``, ``tcwv``) are skipped.
+        every atmospheric canonical, plus ``sp`` when the tensor has it.
+        Untouched SFNO channels (100 m wind, ``tcwv``) are skipped.
     """
     lats_global = np.asarray(coords["lat"], dtype=float)
     lons_global = np.asarray(coords["lon"], dtype=float)
@@ -139,13 +156,22 @@ def extract_snapshot_dataset(
     box_lats = lats_global[lat_sl]
     box_lons = lons_global[lon_sl]
 
-    x_np = _tensor_to_numpy(x)
-    if x_np.ndim != 6:
+    if x.ndim == 6:
+        sample = (batch_idx, time_idx, lead_time_idx)
+    elif x.ndim == 5:
+        sample = (time_idx, lead_time_idx)
+    else:
         raise ValueError(
-            "extract_snapshot_dataset: expected 6-D SFNO tensor "
-            "(batch, time, lead_time, variable, lat, lon); "
-            f"got shape {x_np.shape}"
+            "extract_snapshot_dataset: expected a 6-D "
+            "(batch, time, lead_time, variable, lat, lon) or 5-D "
+            "(time, lead_time, variable, lat, lon) SFNO tensor; "
+            f"got shape {tuple(x.shape)}"
         )
+    # (variable, lat_box, lon_box): sliced on the device, then copied. Always
+    # an independent copy -- for numpy or CPU-tensor input the conversion
+    # alone returns a view, and a later write_back would silently change the
+    # extracted Dataset too.
+    box = np.array(_tensor_to_numpy(x[sample][:, lat_sl, lon_sl]), copy=True)
 
     data_vars: dict = {}
 
@@ -154,8 +180,10 @@ def extract_snapshot_dataset(
         ch = sfno_channel_index(variables, canon, None)
         if ch is None:
             continue
-        slab = x_np[batch_idx, time_idx, lead_time_idx, ch, lat_sl, lon_sl]
-        data_vars[canon] = (("latitude", "longitude"), slab)
+        data_vars[canon] = (("latitude", "longitude"), box[ch])
+    ch = _sp_channel_index(variables)
+    if ch is not None:
+        data_vars[SP_CHANNEL] = (("latitude", "longitude"), box[ch])
 
     # Atmospheric: per-canonical level list = every SFNO level for which the
     # channel is present. Common level axis = intersection across canonicals,
@@ -182,10 +210,8 @@ def extract_snapshot_dataset(
                 [sfno_channel_index(variables, canon, lev) for lev in common_levels],
                 dtype=int,
             )
-            # Fancy indexing on the variable axis returns
-            # (n_lev, n_lat_box, n_lon_box) after collapsing the leading dims.
-            slab = x_np[batch_idx, time_idx, lead_time_idx, indices, lat_sl, lon_sl]
-            data_vars[canon] = (("level", "latitude", "longitude"), slab)
+            # Fancy indexing on the variable axis: (n_lev, n_lat_box, n_lon_box).
+            data_vars[canon] = (("level", "latitude", "longitude"), box[indices])
         levels_coord = np.asarray(common_levels, dtype=float)
     else:
         levels_coord = np.asarray([], dtype=float)
@@ -213,9 +239,10 @@ def apply(
     """Apply the built vortex to an SFNO-extracted canonical Dataset.
 
     The extracted Dataset already uses canonical short names, so the default
-    ``var_map`` is identity. Kept for API symmetry with the other backends.
+    ``var_map`` is identity. ``sp``, if present, follows the MSLP change
+    (:func:`tcinit.backends.surface_pressure.follow_msl`).
     """
-    return bv.apply(
+    out = bv.apply(
         ds,
         var_map=var_map,
         lat_name=lat_name,
@@ -223,6 +250,7 @@ def apply(
         level_name=level_name,
         additive_z=additive_z,
     )
+    return follow_msl(ds, out, bv, lat_name=lat_name, lon_name=lon_name)
 
 
 def write_back(
@@ -238,7 +266,8 @@ def write_back(
 ):
     """Blend a modified canonical Dataset back into the SFNO tensor in-place.
 
-    Broadcasts the box slice across every ``(batch, time, lead_time)`` slot,
+    Broadcasts the box slice across every ``(batch, time, lead_time)`` slot
+    (or ``(time, lead_time)`` for a 5-D tensor),
     matching :mod:`tcinit.backends.aurora_backend`'s convention of injecting
     the same vortex at every input time. Because
     :meth:`tcinit.ideal_tc_vortex.BogusVortex.apply` already applied a cosine taper
@@ -272,11 +301,15 @@ def write_back(
             return torch.as_tensor(vals, dtype=x.dtype, device=x.device)
         return vals.astype(x.dtype, copy=False)
 
-    # Surface: one 2-D slab per canonical.
-    for canon in SURF_VARS:
+    # Surface: one 2-D slab per canonical, plus sp.
+    for canon in list(SURF_VARS) + [SP_CHANNEL]:
         if canon not in modified_ds.data_vars:
             continue
-        ch = sfno_channel_index(variables, canon, None)
+        ch = (
+            _sp_channel_index(variables)
+            if canon == SP_CHANNEL
+            else sfno_channel_index(variables, canon, None)
+        )
         if ch is None:
             continue
         vals = np.asarray(modified_ds[canon].values, dtype=np.float64)

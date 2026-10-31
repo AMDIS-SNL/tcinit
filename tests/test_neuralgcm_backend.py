@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
+from tcinit.constants import R_D
 from tcinit.backends import neuralgcm_backend
 from tcinit.snapshot import Snapshot
 from tcinit.ideal_tc_vortex import BogusVortex
@@ -62,7 +63,7 @@ def test_neuralgcm_apply_modifies_atmos_vars():
     bt = make_best_track(datetime(2020, 9, 1, 6), lat_deg=lat_c, lon_deg=lon_c)
     bv = BogusVortex(snap, bt, datetime(2020, 9, 1, 6)).build()
 
-    ds_out = neuralgcm_backend.apply(ds, bv)
+    ds_out = neuralgcm_backend.apply(ds, bv, match_surface_pressure=False)
     # Long-form vars still there.
     for name in (
         "temperature",
@@ -73,7 +74,7 @@ def test_neuralgcm_apply_modifies_atmos_vars():
     ):
         assert name in ds_out.data_vars
 
-    # geopotential should be unchanged when additive_z=False (default).
+    # geopotential unchanged with additive_z=False and no surface matching.
     assert np.allclose(
         ds_out["geopotential"].values, ds["geopotential"].values, atol=1e-6
     )
@@ -322,3 +323,94 @@ def test_write_back_after_vortex_modifies_only_box():
 
     # dtype must be preserved through the round-trip (encode expects float32).
     assert new_inputs["temperature"].dtype == inputs["temperature"].dtype
+
+
+# ---------------------------------------------------------------------------
+# Surface-pressure matching: the encoder diagnoses p_s from geopotential
+# ---------------------------------------------------------------------------
+
+T0_K = 290.0
+P_SFC_CTRL_PA = 99000.0  # inside the level range
+
+
+def _hydrostatic_ds():
+    """NeuralGCM-shape box: isothermal, geopotential consistent with 990 hPa."""
+    ds = _make_neuralgcm_ds()
+    p_pa = ds["level"].values * 100.0
+    z = R_D * T0_K * np.log(P_SFC_CTRL_PA / p_pa)  # zero at the surface
+    shape = ds["geopotential"].shape
+    ds["temperature"][:] = T0_K
+    ds["geopotential"][:] = np.broadcast_to(z[:, None, None], shape)
+    return ds
+
+
+def _encoder_surface_pressure(ds):
+    """dinosaur's get_surface_pressure inside the level range: z = 0, linear in p."""
+    z = ds["geopotential"].transpose("level", "latitude", "longitude").values
+    p = ds["level"].values * 100.0
+    order = np.argsort(p)
+    out = np.empty(z.shape[1:])
+    for i in range(z.shape[1]):
+        for j in range(z.shape[2]):
+            out[i, j] = np.interp(0.0, -z[order, i, j], p[order])
+    return out
+
+
+def _bv_for(ds):
+    snap = Snapshot.from_xarray(ds)
+    lat_c = float(0.5 * (snap.box_lats[0] + snap.box_lats[-1]))
+    lon_c = float(0.5 * (snap.box_lons[0] + snap.box_lons[-1]))
+    snap.set_storm_center(
+        loc=(lat_c, lon_c),
+        rdr_km=60.0,
+        mslp_env_mean_pa=P_SFC_CTRL_PA,
+        t2m_storm_mean_k=300.0,
+    )
+    bt = make_best_track(datetime(2020, 9, 1, 6), lat_deg=lat_c, lon_deg=lon_c)
+    return BogusVortex(snap, bt, datetime(2020, 9, 1, 6)).build()
+
+
+def test_apply_puts_kc_surface_low_into_geopotential():
+    ds = _hydrostatic_ds()
+    bv = _bv_for(ds)
+    out = neuralgcm_backend.apply(ds, bv)
+
+    p_before = _encoder_surface_pressure(ds)
+    # Linear-in-p interpolation of a log-linear profile: ~0.3 hPa off.
+    np.testing.assert_allclose(p_before, P_SFC_CTRL_PA, atol=50.0)
+    target = (1.0 - bv.blend) * p_before + bv.blend * bv.p_sfc_bogus_pa
+    p_after = _encoder_surface_pressure(out)
+    np.testing.assert_allclose(p_after, target, atol=1.0)  # within 0.01 hPa
+    assert p_after.min() < P_SFC_CTRL_PA - 2000.0  # a real low, > 20 hPa deep
+
+
+def test_apply_leaves_geopotential_outside_the_storm_bit_identical():
+    ds = _hydrostatic_ds()
+    bv = _bv_for(ds)
+    out = neuralgcm_backend.apply(ds, bv)
+    outside = bv.blend == 0.0
+    assert outside.any()
+    z0 = ds["geopotential"].transpose("level", "latitude", "longitude").values
+    z1 = out["geopotential"].transpose("level", "latitude", "longitude").values
+    np.testing.assert_array_equal(z1[:, outside], z0[:, outside])
+
+
+def test_apply_warm_core_raises_upper_levels_relative_to_surface():
+    """Hydrostatic update: the low weakens with height above a warm core."""
+    ds = _hydrostatic_ds()
+    bv = _bv_for(ds)
+    out = neuralgcm_backend.apply(ds, bv)
+    i, j = np.unravel_index(np.argmax(bv.blend), bv.blend.shape)
+    dz = (
+        out["geopotential"].transpose("level", "latitude", "longitude").values
+        - ds["geopotential"].transpose("level", "latitude", "longitude").values
+    )[:, i, j]
+    levels = ds["level"].values
+    assert dz[levels == 1000][0] < 0.0  # surface low
+    assert dz[levels == 200][0] > dz[levels == 1000][0]
+
+
+def test_apply_rejects_additive_z_with_surface_matching():
+    ds = _hydrostatic_ds()
+    with pytest.raises(ValueError, match="additive_z=False"):
+        neuralgcm_backend.apply(ds, _bv_for(ds), additive_z=True)

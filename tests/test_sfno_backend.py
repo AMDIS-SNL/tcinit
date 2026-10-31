@@ -11,6 +11,7 @@ from datetime import datetime
 
 import numpy as np
 import pytest
+import xarray as xr
 
 from tcinit.backends import sfno_backend
 from tcinit.naming import (
@@ -57,6 +58,8 @@ def _make_sfno_state(
     x[..., _ch("msl"), :, :] = 101300.0 + 20.0 * rs.randn(n_lat, n_lon).astype(
         np.float32
     )
+    # Surface pressure a little below MSLP, as over the ocean.
+    x[..., _ch("sp"), :, :] = x[..., _ch("msl"), :, :] - 50.0
     x[..., _ch("t2m"), :, :] = 298.0 + rs.randn(n_lat, n_lon).astype(np.float32)
     x[..., _ch("u10m"), :, :] = 0.5 * rs.randn(n_lat, n_lon).astype(np.float32)
     x[..., _ch("v10m"), :, :] = 0.5 * rs.randn(n_lat, n_lon).astype(np.float32)
@@ -134,12 +137,12 @@ def test_extract_returns_canonical_dataset():
         x, coords, box_center=box_center, box_size=box_size
     )
 
-    # Canonical short-name presence.
-    for name in ("msl", "2t", "10u", "10v", "t", "u", "v", "q", "z"):
+    # Canonical short-name presence, plus sp (follows the MSLP change).
+    for name in ("msl", "2t", "10u", "10v", "t", "u", "v", "q", "z", "sp"):
         assert name in ds.data_vars, f"missing {name}"
 
     # Untouched SFNO channels must NOT appear (they're not in the map).
-    for excluded in ("u100m", "v100m", "sp", "tcwv"):
+    for excluded in ("u100m", "v100m", "tcwv"):
         assert excluded not in ds.data_vars
 
     # Dims and coord windowing.
@@ -191,15 +194,87 @@ def test_extract_values_match_source_tensor():
     )
 
 
+def test_extract_accepts_5d_tensor_like_fetch_data_output():
+    """earth2studio's fetch_data returns (time, lead_time, variable, lat, lon)."""
+    x, coords = _make_sfno_state()
+    kwargs = dict(box_center=(15.0, 130.0), box_size=3.0)
+    ds6 = sfno_backend.extract_snapshot_dataset(x, coords, **kwargs)
+    ds5 = sfno_backend.extract_snapshot_dataset(x[0], coords, **kwargs)
+    xr.testing.assert_identical(ds5, ds6)
+
+
 def test_extract_raises_on_wrong_ndim():
     x, coords = _make_sfno_state()
-    with pytest.raises(ValueError, match="expected 6-D SFNO tensor"):
+    with pytest.raises(ValueError, match="6-D .* or 5-D"):
         sfno_backend.extract_snapshot_dataset(
-            x[0],  # 5-D
+            x[0, 0],  # 4-D
             coords,
             box_center=(15.0, 130.0),
             box_size=3.0,
         )
+
+
+class _DeviceTensor:
+    """Minimal torch.Tensor stand-in that records what gets copied to host."""
+
+    copied_shapes: list = []
+
+    def __init__(self, arr):
+        self._arr = arr
+        self.ndim = arr.ndim
+        self.shape = arr.shape
+        self.dtype = "torch.float32"
+
+    def __getitem__(self, idx):
+        return _DeviceTensor(self._arr[idx])
+
+    def detach(self):
+        return self
+
+    def cpu(self):
+        _DeviceTensor.copied_shapes.append(self._arr.shape)
+        return self
+
+    def numpy(self):
+        return self._arr
+
+
+def test_extract_copies_only_the_box_off_the_device():
+    x, coords = _make_sfno_state()
+    _DeviceTensor.copied_shapes = []
+    ds = sfno_backend.extract_snapshot_dataset(
+        _DeviceTensor(x), coords, box_center=(15.0, 130.0), box_size=3.0
+    )
+    n_var = len(coords["variable"])
+    box_shape = (n_var, ds.sizes["latitude"], ds.sizes["longitude"])
+    assert _DeviceTensor.copied_shapes == [box_shape]
+    xr.testing.assert_identical(
+        ds,
+        sfno_backend.extract_snapshot_dataset(
+            x, coords, box_center=(15.0, 130.0), box_size=3.0
+        ),
+    )
+
+
+def test_write_back_into_5d_tensor():
+    x, coords = _make_sfno_state()
+    x5 = x[0].copy()
+    ds = sfno_backend.extract_snapshot_dataset(
+        x5, coords, box_center=(15.0, 130.0), box_size=3.0
+    )
+    ds_mod = ds.copy(deep=True)
+    ds_mod["msl"] = ds_mod["msl"] - 1000.0
+    sfno_backend.write_back(
+        x5,
+        coords,
+        ds_mod,
+        box_lats=ds["latitude"].values,
+        box_lons=ds["longitude"].values,
+    )
+    again = sfno_backend.extract_snapshot_dataset(
+        x5, coords, box_center=(15.0, 130.0), box_size=3.0
+    )
+    np.testing.assert_allclose(again["msl"].values, ds["msl"].values - 1000.0)
 
 
 def test_extract_raises_on_empty_box():
@@ -298,11 +373,18 @@ def test_write_back_after_vortex_localises_changes():
         x[..., t500_ch, lat_sl, lon_sl], x_before[..., t500_ch, lat_sl, lon_sl]
     )
 
-    # Untouched channels (u100m, v100m, sp, tcwv) must be bit-identical
+    # Untouched channels (u100m, v100m, tcwv) must be bit-identical
     # everywhere, including inside the box — write_back must skip them.
-    for excluded in ("u100m", "v100m", "sp", "tcwv"):
+    for excluded in ("u100m", "v100m", "tcwv"):
         ch = int(np.where(coords["variable"] == excluded)[0][0])
         np.testing.assert_allclose(x[..., ch, :, :], x_before[..., ch, :, :])
+
+    # sp follows msl inside the box and is untouched outside it.
+    sp_ch = int(np.where(coords["variable"] == "sp")[0][0])
+    d_msl = x[..., msl_ch, :, :] - x_before[..., msl_ch, :, :]
+    d_sp = x[..., sp_ch, :, :] - x_before[..., sp_ch, :, :]
+    assert d_msl.min() < -500.0
+    np.testing.assert_allclose(d_sp, d_msl, atol=50.0)
 
 
 def test_write_back_broadcasts_across_batch_and_time():
@@ -408,3 +490,37 @@ def test_write_back_with_torch_tensor_preserves_dtype_and_device():
     assert x.dtype == torch.float32
     # In-place mutation: x is the same tensor we passed in, now vortex-imprinted.
     assert not torch.allclose(x[0, 0, 0, msl_ch], msl_before)
+
+
+def test_extract_returns_a_copy_not_a_view():
+    """write_back must not change a previously extracted (control) box."""
+    x, coords = _make_sfno_state()
+    ds = sfno_backend.extract_snapshot_dataset(
+        x, coords, box_center=(15.0, 130.0), box_size=3.0
+    )
+    before = ds["msl"].values.copy()
+    x[...] = 0.0
+    np.testing.assert_array_equal(ds["msl"].values, before)
+
+
+def test_apply_scales_sp_with_msl():
+    x, coords = _make_sfno_state()
+    ds = sfno_backend.extract_snapshot_dataset(
+        x, coords, box_center=(15.0, 130.0), box_size=3.0
+    )
+    snap = Snapshot.from_xarray(ds)
+    lat_c = float(0.5 * (snap.box_lats[0] + snap.box_lats[-1]))
+    lon_c = float(0.5 * (snap.box_lons[0] + snap.box_lons[-1]))
+    snap.set_storm_center(
+        loc=(lat_c, lon_c),
+        rdr_km=100.0,
+        mslp_env_mean_pa=101300.0,
+        t2m_storm_mean_k=300.0,
+    )
+    bt = make_best_track(datetime(2020, 9, 1, 6), lat_deg=lat_c, lon_deg=lon_c)
+    bv = BogusVortex(snap, bt, datetime(2020, 9, 1, 6)).build()
+    mod = sfno_backend.apply(ds, bv)
+    np.testing.assert_allclose(
+        (mod["sp"] / mod["msl"]).values, (ds["sp"] / ds["msl"]).values, rtol=1e-6
+    )
+    assert float(mod["sp"].min()) < float(ds["sp"].min()) - 500.0

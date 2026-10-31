@@ -13,9 +13,19 @@ dim order is intentional (dinosaur's spherical harmonic layout). Because
 ``BogusVortex.apply`` blends by xarray broadcasting (by dim NAME), the swap
 is handled transparently.
 
-Because NeuralGCM has no surface fields to inject and its ``geopotential``
-is diagnostic (hydrostatically integrated from ``temperature``), we default
-``additive_z=False`` — see the design-doc risks section.
+NeuralGCM has no surface-pressure input: its encoder diagnoses surface
+pressure from ``geopotential``, as the pressure where ``geopotential``
+equals the surface geopotential (``orography · g``), linearly interpolated
+in pressure (dinosaur's ``vertical_interpolation.get_surface_pressure``).
+So the vortex's surface low has to be written into ``geopotential``.
+:func:`apply` does this by default (``match_surface_pressure=True``): after
+K&C's warm-core T anomaly is added, each column's geopotential is updated
+hydrostatically for the T change and then shifted so the diagnosed surface
+pressure equals K&C's replacement blend toward the vortex surface pressure,
+the same target the surface-field backends apply to MSLP. K&C's own
+geopotential anomaly (``additive_z=True``) is not used: it is measured from
+the environment, so adding it to an analysis that already holds a weaker
+low double-counts the pressure drop.
 
 Two container shapes are supported:
 
@@ -41,6 +51,7 @@ from typing import Mapping, Optional, Tuple
 import numpy as np
 import xarray as xr
 
+from tcinit.constants import R_D
 from tcinit.naming import NEURALGCM_VAR_MAP
 from tcinit.ideal_tc_vortex import BogusVortex
 
@@ -57,6 +68,8 @@ def apply(
     lon_name: str = "longitude",
     level_name: str = "level",
     additive_z: bool = False,
+    match_surface_pressure: bool = True,
+    surface_geopotential: Optional[np.ndarray] = None,
     var_map: Optional[dict] = None,
 ) -> xr.Dataset:
     """Apply the built vortex to a NeuralGCM-shape Dataset.
@@ -66,11 +79,30 @@ def apply(
     Surface variables are silently skipped (they're not present in ``ds``).
     Pass ``var_map`` to override / extend the default map (e.g. if you keep
     NeuralGCM's cloud-water variables around and want them left untouched).
+
+    Args:
+        match_surface_pressure: rewrite ``geopotential`` so the surface
+            pressure NeuralGCM's encoder diagnoses from it equals the K&C
+            target (see the module docstring). ``False`` leaves
+            ``geopotential`` as K&C's ``additive_z`` setting leaves it, which
+            for the default ``additive_z=False`` means no surface low.
+        surface_geopotential: ``orography · g`` (m²/s²) on the box,
+            shaped ``(latitude, longitude)`` in the box's coordinate order.
+            Default zero, i.e. sea level, which is right for an ocean storm.
+            NeuralGCM's encoder uses its own spectrally filtered orography,
+            which differs from the raw ``geopotential_at_surface`` near
+            coasts; a 10 m difference moves the diagnosed surface pressure
+            by about 1 hPa.
     """
+    if match_surface_pressure and additive_z:
+        raise ValueError(
+            "neuralgcm_backend.apply: match_surface_pressure=True replaces "
+            "K&C's geopotential anomaly; pass additive_z=False."
+        )
     active_map = dict(NEURALGCM_VAR_MAP)
     if var_map is not None:
         active_map.update(var_map)
-    return bv.apply(
+    out = bv.apply(
         ds,
         var_map=active_map,
         lat_name=lat_name,
@@ -78,6 +110,110 @@ def apply(
         level_name=level_name,
         additive_z=additive_z,
     )
+    z_name = active_map.get("z")
+    t_name = active_map.get("t")
+    if match_surface_pressure and z_name in ds and t_name in ds:
+        dims = (level_name, lat_name, lon_name)
+        z_new = _match_surface_pressure(
+            z=ds[z_name].transpose(*dims).values,
+            t_before=ds[t_name].transpose(*dims).values,
+            t_after=out[t_name].transpose(*dims).values,
+            levels_pa=np.asarray(ds[level_name].values, dtype=float) * 100.0,
+            blend=bv.blend,
+            p_sfc_target_pa=bv.p_sfc_bogus_pa,
+            surface_geopotential=surface_geopotential,
+        )
+        out[z_name] = xr.DataArray(
+            z_new, dims=dims, coords={d: ds[d] for d in dims}
+        ).transpose(*ds[z_name].dims)
+    return out
+
+
+def _crossing_pressure(rel: np.ndarray, p: np.ndarray) -> float:
+    """Pressure where ``rel`` (increasing with ``p``) crosses zero.
+
+    Matches dinosaur's ``get_surface_pressure``
+    (``linear_interp_with_linear_extrap``): linear in pressure inside the
+    level range, and extrapolated from the bottom two levels for columns
+    whose surface lies below the deepest level.
+    """
+    if rel[-1] >= 0.0:
+        return float(np.interp(0.0, rel, p))
+    slope = (rel[-1] - rel[-2]) / (p[-1] - p[-2])
+    if not slope > 0.0:
+        return float("nan")
+    return float(p[-1] - rel[-1] / slope)
+
+
+def _value_at(f: np.ndarray, p: np.ndarray, p_target: float) -> float:
+    """Linear interpolation of ``f(p)``, extrapolated past the deepest level."""
+    if p_target <= p[-1]:
+        return float(np.interp(p_target, p, f))
+    slope = (f[-1] - f[-2]) / (p[-1] - p[-2])
+    return float(f[-1] + slope * (p_target - p[-1]))
+
+
+def _match_surface_pressure(
+    *,
+    z: np.ndarray,
+    t_before: np.ndarray,
+    t_after: np.ndarray,
+    levels_pa: np.ndarray,
+    blend: np.ndarray,
+    p_sfc_target_pa: np.ndarray,
+    surface_geopotential: Optional[np.ndarray] = None,
+) -> np.ndarray:
+    """Geopotential whose diagnosed surface pressure hits the K&C blend.
+
+    All 3-D arrays are ``(level, lat, lon)``; 2-D arrays ``(lat, lon)``.
+    Per column:
+
+    1. ``p_ctrl``: the surface pressure the unmodified ``z`` implies.
+    2. ``p_target = (1 - blend) · p_ctrl + blend · p_sfc_target``.
+    3. ``w(p) = z(p) + R_d ∫_p^{p_bottom} ΔT d(ln p')``: ``z`` updated
+       hydrostatically for the temperature change, so the warm core raises
+       the upper levels relative to the surface.
+    4. ``z_new = w + (Φ_s − w(p_target))``, so ``z_new(p_target) = Φ_s``.
+
+    Where ``blend`` is zero, ``ΔT`` is zero and ``p_target = p_ctrl``, so the
+    column comes back unchanged. Columns where no surface pressure can be
+    diagnosed (``z`` not decreasing with pressure) are left unchanged.
+    """
+    order = np.argsort(levels_pa)  # top of atmosphere first
+    p = levels_pa[order]
+    z_o = np.asarray(z, dtype=float)[order]
+    dT = (np.asarray(t_after, dtype=float) - np.asarray(t_before, dtype=float))[order]
+    phi_s = (
+        np.zeros(z_o.shape[1:])
+        if surface_geopotential is None
+        else np.asarray(surface_geopotential, dtype=float)
+    )
+
+    # Thickness change from each level down to the deepest one (trapezoid
+    # in ln p), accumulated upward from the bottom.
+    layer = 0.5 * (dT[1:] + dT[:-1]) * np.diff(np.log(p))[:, None, None]
+    below = np.concatenate(
+        [np.cumsum(layer[::-1], axis=0)[::-1], np.zeros((1,) + layer.shape[1:])]
+    )
+    w = z_o + R_D * below
+
+    z_new = z_o.copy()
+    n_lat, n_lon = z_o.shape[1:]
+    for i in range(n_lat):
+        for j in range(n_lon):
+            b = float(blend[i, j])
+            if b == 0.0 and not dT[:, i, j].any():
+                continue  # untouched column: keep it bit-identical
+            p_ctrl = _crossing_pressure(phi_s[i, j] - z_o[:, i, j], p)
+            if not np.isfinite(p_ctrl):
+                continue
+            p_target = (1.0 - b) * p_ctrl + b * float(p_sfc_target_pa[i, j])
+            shift = phi_s[i, j] - _value_at(w[:, i, j], p, p_target)
+            z_new[:, i, j] = w[:, i, j] + shift
+
+    out = np.empty_like(z_new)
+    out[order] = z_new
+    return out
 
 
 # ---------------------------------------------------------------------------

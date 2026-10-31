@@ -24,13 +24,15 @@ HICCUP-relevant variable subsets:
 
 - Atmospheric (K&C touches): ``t, u, v, q, z``. HICCUP-only vars that pass
   through untouched: ``ciwc, clwc, o3`` (plus ancillaries).
-- Surface (K&C touches, when present): ``msl, 2t, 10u, 10v``. HICCUP's ERA5
-  subclass only reads ``sp, skt, z`` from the surface file — leaving those
-  and the other surface fields (``sst, siconc, sd, stl1..4, tsn``) alone is
-  safe. Surface ``z`` (surface geopotential) is a 2-D field, distinct from
-  atmospheric ``z`` (geopotential on pressure levels) which is 3-D; the
-  file-based writer distinguishes by dim structure so surface ``z`` is
-  never accidentally overwritten with a 3-D block.
+- Surface (K&C touches, when present): ``msl, 2t, 10u, 10v``, plus ``sp``.
+  HICCUP's EAM path builds ``PS`` from ERA5 ``sp`` and never reads ``msl``,
+  ``2t`` or the 10 m winds, so the vortex's pressure drop only reaches E3SM
+  through ``sp``: :func:`apply` scales ``sp`` by the same factor K&C applies
+  to ``msl`` (see there). The other surface fields (``skt, sst, siconc, sd,
+  stl1..4, tsn``) are left alone. Surface ``z`` (surface geopotential) is a
+  2-D field, distinct from atmospheric ``z`` (geopotential on pressure
+  levels) which is 3-D; extract and write-back both distinguish by dim
+  structure so the two are never confused.
 """
 
 from __future__ import annotations
@@ -47,12 +49,17 @@ from tcinit.naming import (
     ERA5_VAR_MAP,
     SURF_VARS,
 )
+from tcinit.backends.surface_pressure import follow_msl
 from tcinit.ideal_tc_vortex import BogusVortex
 
 # Coord names that ERA5 has used across CDS versions. First match wins on
 # auto-detect. Canonical (returned by extract) is always ``level``/``time``.
 _LEVEL_ALIASES: tuple[str, ...] = ("level", "pressure_level")
 _TIME_ALIASES: tuple[str, ...] = ("time", "valid_time")
+
+# Surface fields HICCUP reads that the vortex also changes, beyond the
+# canonical SURF_VARS. Carried through extract -> apply -> write_back.
+HICCUP_SURF_VARS: tuple[str, ...] = ("sp",)
 
 
 def _detect_dim_name(ds: xr.Dataset, aliases: Sequence[str]) -> str | None:
@@ -172,17 +179,31 @@ def apply(
     rather than GRIB shortnames, either pass ``var_map`` explicitly or
     prefer :func:`extract_snapshot_dataset` / :func:`write_back`, which
     handle the naming disambiguation automatically.
+
+    Surface pressure ``sp``, if present, follows MSLP: it is multiplied by
+    ``msl_bogus / msl``, which keeps the sea-level reduction factor of each
+    cell and, over the ocean (``sp`` ≈ ``msl``), gives the same pressure
+    drop. Without ``msl`` in ``ds``, ``sp`` gets K&C's replacement blend
+    toward the vortex surface pressure directly.
     """
     active_map = dict(ERA5_VAR_MAP)
     if var_map is not None:
         active_map.update(var_map)
-    return bv.apply(
+    out = bv.apply(
         ds,
         var_map=active_map,
         lat_name=lat_name,
         lon_name=lon_name,
         level_name=level_name,
         additive_z=additive_z,
+    )
+    return follow_msl(
+        ds,
+        out,
+        bv,
+        msl_name=active_map.get("msl", "msl"),
+        lat_name=lat_name,
+        lon_name=lon_name,
     )
 
 
@@ -224,9 +245,12 @@ def extract_snapshot_dataset(
         Dataset with dims ``(level, latitude, longitude)``, canonical short
         variable names (``msl, 2t, 10u, 10v, t, u, v, q, z``) filtered to
         the subset present across all input files, ``time`` collapsed away.
-        HICCUP-only vars (``sp, skt, sst, siconc, sd, stl1..4, tsn, ciwc,
-        clwc, o3, sfc-z``) are omitted from the extract but preserved on
-        :func:`write_back`.
+        Surface pressure ``sp`` is included too, when present, so
+        :func:`apply` can carry the vortex's pressure drop into it. Other
+        HICCUP-only vars (``skt, sst, siconc, sd, stl1..4, tsn, ciwc, clwc,
+        o3, sfc-z``) are omitted from the extract but preserved on
+        :func:`write_back`. File order doesn't matter: only the
+        level-dimensioned ``z`` is kept.
     """
     if isinstance(input_files, (str, os.PathLike)):
         input_files = [input_files]
@@ -239,10 +263,18 @@ def extract_snapshot_dataset(
         try:
             canon, _ = _canonicalise(raw)
             # Only keep the K&C-touched canonicals; drop everything else.
+            # Atmospheric names must carry a level dim: the surface file's
+            # 2-D ``z`` (surface geopotential) keeps its name through
+            # _canonicalise and would otherwise shadow the 3-D ``z`` in the
+            # merge below whenever the surface file is listed first.
             keep = [
                 name
-                for name in (list(SURF_VARS) + list(ATMOS_VARS))
+                for name in (list(SURF_VARS) + list(HICCUP_SURF_VARS))
                 if name in canon.data_vars
+            ] + [
+                name
+                for name in ATMOS_VARS
+                if name in canon.data_vars and "level" in canon[name].dims
             ]
             per_file.append(canon[keep].load())
         finally:
@@ -305,12 +337,15 @@ def write_back(
 ) -> str:
     """Write a modified canonical box back into a copy of an ERA5 netCDF.
 
-    For each K&C-touched canonical variable both present in ``modified_ds``
-    and in the source ``input_file``, the box slice is overwritten across
-    every time slot (or the specified ``time_slots``). Every other variable
-    in the source file — ``sp``, ``skt``, surface ``z``, ``ciwc``, ``clwc``,
-    ``o3``, sea-ice/SST/soil moisture, ancillary bounds — passes through
-    unchanged so HICCUP's downstream reads still find what they expect.
+    For each K&C-touched variable (canonical names plus ``sp``) present in
+    both ``modified_ds`` and the source ``input_file``, the box slice is
+    overwritten across every time slot (or the specified ``time_slots``).
+    Every other variable in the source file — ``skt``, surface ``z``,
+    ``ciwc``, ``clwc``, ``o3``, sea-ice/SST/soil moisture, ancillary bounds
+    — passes through unchanged so HICCUP's downstream reads still find what
+    they expect. Each rewritten variable keeps its source ``_FillValue`` and
+    storage settings, so HICCUP doesn't see new NaN fill values; int16
+    packing is dropped, since the vortex can leave the packed range.
 
     Args:
         input_file: source ERA5 netCDF path.
@@ -374,7 +409,8 @@ def write_back(
     else:
         mod_levels = np.array([], dtype=float)
 
-    for canon in list(SURF_VARS) + list(ATMOS_VARS):
+    surf_vars = list(SURF_VARS) + list(HICCUP_SURF_VARS)
+    for canon in surf_vars + list(ATMOS_VARS):
         if canon not in modified_ds.data_vars:
             continue
         # Find the source-side variable name for this canonical.
@@ -424,7 +460,7 @@ def write_back(
                     target_vals[tuple(idx)] = mod_ordered[k_mod].astype(
                         target_vals.dtype, copy=False
                     )
-        elif canon in SURF_VARS:
+        elif canon in surf_vars and level_axis is None:
             mod_da = modified_ds[canon].transpose(lat_name, lon_name)
             mod_ordered = np.asarray(mod_da.values)
             for t in ts:
@@ -442,13 +478,22 @@ def write_back(
             # the surface ``z`` field with atmospheric ``z`` data.
             continue
 
-        out[native] = xr.DataArray(
+        new_da = xr.DataArray(
             target_vals,
             dims=dims,
             coords=target.coords,
             attrs=target.attrs,
             name=target.name,
         )
+        # Keep the source fill value and storage settings so HICCUP doesn't
+        # see new NaN fills, but not int16 packing: the bogus can push values
+        # outside the range the original scale_factor/add_offset covers.
+        encoding = dict(target.encoding)
+        if "scale_factor" in encoding or "add_offset" in encoding:
+            for key in ("scale_factor", "add_offset", "dtype", "missing_value"):
+                encoding.pop(key, None)
+        new_da.encoding = encoding
+        out[native] = new_da
 
     out.to_netcdf(output_file)
     out.close()
