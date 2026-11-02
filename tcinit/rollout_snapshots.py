@@ -2021,3 +2021,59 @@ def plot_rollout_comparison(
             labels=labels,
         )
         _plot_mse_comparison_page(ctrl, bogus, pdf, labels=labels)
+
+
+def plot_best_track_comparison(
+    ctrl: "RolloutSnapshots",
+    bogus: "RolloutSnapshots",
+    best_track,
+    filename: Optional[Union[str, Path]] = None,
+    *,
+    labels: tuple = ("control", "bogus"),
+    title: Optional[str] = None,
+    ylabels: tuple = ("min MSLP (hPa)", "max 10 m wind (kt)", "position error (km)"),
+) -> None:
+    """Three panels against lead time: MSLP, VMAX, and position error.
+
+    Both rollouts are compared with ``best_track`` through
+    :meth:`RolloutSnapshots.to_comparison_dataframe`, so the model and
+    best-track values share best-track units (hPa, kt). The best track is
+    drawn in black on the MSLP and VMAX panels.
+
+    Args:
+        ctrl: Control rollout.
+        bogus: Bogus (intervened) rollout of the same storm and start time.
+        best_track: Best-track object for the storm.
+        filename: Output path; ``None`` shows the figure instead.
+        labels: Legend labels for the two rollouts, in ``(ctrl, bogus)`` order.
+        title: Figure title.
+        ylabels: Y-axis labels for the three panels, e.g. to mark a model's
+            MSLP and wind as proxies.
+    """
+    import matplotlib.pyplot as plt
+
+    df_ctrl = ctrl.to_comparison_dataframe(best_track)
+    df_bogus = bogus.to_comparison_dataframe(best_track)
+
+    fig, axes = plt.subplots(1, 3, figsize=(16, 4.5))
+    for df, label, style in ((df_ctrl, labels[0], "o-"), (df_bogus, labels[1], "^--")):
+        lead = df["model_lead_hours"]
+        axes[0].plot(lead, df["model_MSLP"], style, label=label)
+        axes[1].plot(lead, df["model_VMAX"], style, label=label)
+        axes[2].plot(lead, df["position_error_km"], style, label=label)
+    lead = df_ctrl["model_lead_hours"]
+    axes[0].plot(lead, df_ctrl["bt_MSLP"], "k-", lw=2, label="best track")
+    axes[1].plot(lead, df_ctrl["bt_VMAX"], "k-", lw=2, label="best track")
+    for ax, ylabel in zip(axes, ylabels):
+        ax.set_xlabel("lead time (h)")
+        ax.set_ylabel(ylabel)
+        ax.grid(alpha=0.3)
+        ax.legend()
+    if title is not None:
+        fig.suptitle(title)
+    fig.tight_layout()
+    if filename is not None:
+        fig.savefig(str(filename), bbox_inches="tight", dpi=150)
+    else:
+        plt.show()
+    plt.close(fig)
