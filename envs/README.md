@@ -71,6 +71,28 @@ The `cuda/12.9.0` module matters only when a package compiles CUDA code
 during install. If such a build complains about a CUDA version
 mismatch, rebuild with `TORCH_CUDA=cu129` to match the module.
 
+### torchvision must match torch
+
+Aurora needs `timm`, which imports `torchvision`. If pip takes
+`torchvision` from PyPI instead of the CUDA index torch came from,
+`from aurora import ...` fails with
+`RuntimeError: operator torchvision::nms does not exist`. `build-torch.sh`
+installs both from the same index, then pins them with `PIP_CONSTRAINT`
+so later installs (earth2studio, tcinit extras) can't "upgrade"
+torchvision to a newer PyPI release. That is what happened in the
+2026-10-30 build: PyPI's `0.29.2` replaced `0.29.1+cu126`.
+
+To repair an existing env, install the torchvision the CUDA index pairs
+with your torch (for torch 2.14.1 that is `0.29.1+cu126`; see
+`pip index versions torchvision --index-url https://download.pytorch.org/whl/cu126`):
+
+```sh
+pip install --force-reinstall --no-deps "torchvision==0.29.1+cu126" \
+    --index-url https://download.pytorch.org/whl/cu126
+python -c "import torch, torchvision; print(torch.__version__, torchvision.__version__)"  # both +cu126
+envs/lock.sh torch
+```
+
 ### Known warning
 
 Importing torch prints
@@ -175,6 +197,37 @@ envs/lock.sh jax            # writes envs/jax-cuda12.lock.txt
 
 The script checks that `weathernext` and `gdm-xarray-jax` kept their git
 sources.
+
+## Jupyter
+
+Both build scripts install `jupyter` (JupyterLab, the classic notebook,
+`ipykernel`) and register the env as a named kernel, `Python (torch-venv)`
+or `Python (jax-venv)`. Open a demo notebook and pick the kernel for its
+env (see the table at the top). The kernel spec is a small file under
+`~/.local/share/jupyter/kernels/`.
+
+To add Jupyter to an env built before this change, without rebuilding:
+
+```sh
+. /fgs/$USER/causaltc/torch-venv/bin/activate      # or jax-venv
+pip install jupyter
+python -m ipykernel install --user --name torch-venv --display-name "Python (torch-venv)"
+```
+
+Then regenerate that env's lock file with `envs/lock.sh`.
+
+Run Jupyter on the GPU node and reach it through an SSH tunnel:
+
+```sh
+# on cee-compute044, env active
+jupyter lab --no-browser --port 8888
+# on your workstation
+ssh -N -L 8888:localhost:8888 cee-compute044
+```
+
+Then open the `http://localhost:8888/...` URL that `jupyter lab` prints.
+Run `proxy_on` before starting Jupyter if the notebooks need network
+access (ARCO ERA5, checkpoint downloads).
 
 ## Checking an environment
 

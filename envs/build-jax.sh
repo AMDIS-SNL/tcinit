@@ -47,7 +47,13 @@ pip install \
     "weathernext @ git+https://github.com/google-deepmind/weathernext.git@${WEATHERNEXT_REV}" \
     -e "${REPO_ROOT}[neuralgcm,hiccup,plotting,dev]" \
     gcsfs \
-    cfgrib eccodes
+    cfgrib eccodes \
+    jupyter
+
+# Named kernel so the demo notebooks can pick this env from any Jupyter
+# session (the kernel spec is a small file under ~/.local).
+python -m ipykernel install --user --name "$(basename "$VENV")" \
+    --display-name "Python ($(basename "$VENV"))"
 
 pip check
 python - <<'EOF'

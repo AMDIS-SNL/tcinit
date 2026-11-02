@@ -38,7 +38,16 @@ fi
 pip install --upgrade pip
 
 # CUDA torch first, so later installs don't pull a CPU or other-CUDA build.
-pip install torch --index-url "https://download.pytorch.org/whl/${TORCH_CUDA}"
+# torchvision comes from the same index: Aurora needs timm, which imports
+# torchvision, and a PyPI torchvision built for another torch fails at import
+# with "operator torchvision::nms does not exist".
+pip install torch torchvision --index-url "https://download.pytorch.org/whl/${TORCH_CUDA}"
+
+# Hold both at these builds for every later install. Otherwise a dependency
+# that asks for torchvision lets pip "upgrade" to a newer PyPI release (e.g.
+# 0.29.2 over 0.29.1+cu126), which is built for another torch.
+pip freeze | grep -E '^(torch|torchvision)==' > "$VENV/torch-constraints.txt"
+export PIP_CONSTRAINT="$VENV/torch-constraints.txt"
 
 # SFNO. makani isn't on PyPI; install it from git before earth2studio.
 pip install "makani @ git+https://github.com/NVIDIA/makani.git@${MAKANI_REV}"
@@ -51,11 +60,20 @@ pip install -e "${REPO_ROOT}[aurora,hiccup,plotting,dev]"
 # GRIB input (HRES .grb files).
 pip install cfgrib eccodes
 
+# Jupyter, plus a named kernel so the demo notebooks can pick this env from
+# any Jupyter session (the kernel spec is a small file under ~/.local).
+pip install jupyter
+python -m ipykernel install --user --name "$(basename "$VENV")" \
+    --display-name "Python ($(basename "$VENV"))"
+
 pip check
 python - <<'EOF'
 import torch
-print("torch", torch.__version__, "cuda", torch.version.cuda,
-      "cudnn", torch.backends.cudnn.version(),
+import torchvision
+from aurora import AuroraHighRes  # noqa: F401  (imports timm -> torchvision ops)
+from earth2studio.models.px import SFNO  # noqa: F401
+print("torch", torch.__version__, "torchvision", torchvision.__version__,
+      "cuda", torch.version.cuda, "cudnn", torch.backends.cudnn.version(),
       "gpu available", torch.cuda.is_available())
 EOF
 echo "built $VENV; then run pytest -q and envs/lock.sh torch"
