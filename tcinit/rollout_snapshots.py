@@ -696,7 +696,14 @@ class RolloutSnapshots:
         if include_best_track_status and "STATUS" in bt_df.columns:
             bt_cols.append("STATUS")
         bt_cols = [c for c in bt_cols if c in bt_df.columns]
-        bt_df = bt_df[bt_cols].rename(
+        # ATCF repeats each time once per wind-radii threshold, and the parsed
+        # VMAX/MSLP are strings (" 165"); dedupe and make them numeric so the
+        # merge doesn't multiply model rows and the columns plot as numbers.
+        bt_df = bt_df[bt_cols].drop_duplicates(subset="datetimes")
+        for col in ("VMAX", "MSLP"):
+            if col in bt_df.columns:
+                bt_df[col] = pd.to_numeric(bt_df[col], errors="coerce").replace(-999, np.nan)
+        bt_df = bt_df.rename(
             columns={
                 "datetimes": "datetime",
                 "LAT_DEG": f"{best_track_prefix}LAT_DEG",
