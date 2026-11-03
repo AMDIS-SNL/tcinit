@@ -433,7 +433,7 @@ def plot_snapshot(
     figsize: tuple = (16, 16),
     ncontours: int = 40,
     title: Optional[str] = None,
-) -> None:
+):
     """3x3 map-view of a storm-centric Snapshot.
 
     Panels (in order):
@@ -461,6 +461,12 @@ def plot_snapshot(
             snapshot has no bundled fields.
         var_map: canonical -> native name map for ``ds``.
         level_name: level coordinate name in ``ds``.
+        filename: if given, the figure is also saved there (150 dpi; the
+            format follows the extension). The figure stays open, so a
+            notebook can still ``plt.show()`` it.
+
+    Returns:
+        The matplotlib Figure.
     """
     import cartopy.crs as ccrs
 
@@ -682,4 +688,4 @@ def plot_snapshot(
 
     if filename is not None:
         fig.savefig(filename, bbox_inches="tight", dpi=150)
-        plt.close(fig)
+    return fig
