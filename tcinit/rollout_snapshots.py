@@ -702,7 +702,9 @@ class RolloutSnapshots:
         bt_df = bt_df[bt_cols].drop_duplicates(subset="datetimes")
         for col in ("VMAX", "MSLP"):
             if col in bt_df.columns:
-                bt_df[col] = pd.to_numeric(bt_df[col], errors="coerce").replace(-999, np.nan)
+                bt_df[col] = pd.to_numeric(bt_df[col], errors="coerce").replace(
+                    -999, np.nan
+                )
         bt_df = bt_df.rename(
             columns={
                 "datetimes": "datetime",
