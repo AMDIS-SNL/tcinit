@@ -19,13 +19,13 @@ equals the surface geopotential (``orography · g``), linearly interpolated
 in pressure (dinosaur's ``vertical_interpolation.get_surface_pressure``).
 So the vortex's surface low has to be written into ``geopotential``.
 :func:`apply` does this by default (``match_surface_pressure=True``): after
-K&C's warm-core T anomaly is added, each column's geopotential is updated
-hydrostatically for the T change and then shifted so the diagnosed surface
-pressure equals K&C's replacement blend toward the vortex surface pressure,
-the same target the surface-field backends apply to MSLP. K&C's own
-geopotential anomaly (``additive_z=True``) is not used: it is measured from
-the environment, so adding it to an analysis that already holds a weaker
-low double-counts the pressure drop.
+T is blended toward the environment plus K&C's warm core, each column's
+geopotential is updated hydrostatically for the T change and then shifted
+so the diagnosed surface pressure equals K&C's replacement blend toward the
+vortex surface pressure, the same target the surface-field backends apply
+to MSLP. K&C's own geopotential anomaly (``blend_z=True``) is not used by
+default: blending ``z`` toward it moves the encoder's diagnosed surface
+pressure only approximately, whereas this shift hits the target exactly.
 
 Two container shapes are supported:
 
@@ -67,7 +67,7 @@ def apply(
     lat_name: str = "latitude",
     lon_name: str = "longitude",
     level_name: str = "level",
-    additive_z: bool = False,
+    blend_z: bool = False,
     match_surface_pressure: bool = True,
     surface_geopotential: Optional[np.ndarray] = None,
     var_map: Optional[dict] = None,
@@ -84,8 +84,9 @@ def apply(
         match_surface_pressure: rewrite ``geopotential`` so the surface
             pressure NeuralGCM's encoder diagnoses from it equals the K&C
             target (see the module docstring). ``False`` leaves
-            ``geopotential`` as K&C's ``additive_z`` setting leaves it, which
-            for the default ``additive_z=False`` means no surface low.
+            ``geopotential`` as ``blend_z`` leaves it: unchanged for the
+            default ``blend_z=False`` (no surface low), or blended toward
+            the environment plus K&C's anomaly for ``blend_z=True``.
         surface_geopotential: ``orography · g`` (m²/s²) on the box,
             shaped ``(latitude, longitude)`` in the box's coordinate order.
             Default zero, i.e. sea level, which is right for an ocean storm.
@@ -94,10 +95,10 @@ def apply(
             coasts; a 10 m difference moves the diagnosed surface pressure
             by about 1 hPa.
     """
-    if match_surface_pressure and additive_z:
+    if match_surface_pressure and blend_z:
         raise ValueError(
             "neuralgcm_backend.apply: match_surface_pressure=True replaces "
-            "K&C's geopotential anomaly; pass additive_z=False."
+            "K&C's geopotential anomaly; pass blend_z=False."
         )
     active_map = dict(NEURALGCM_VAR_MAP)
     if var_map is not None:
@@ -108,7 +109,7 @@ def apply(
         lat_name=lat_name,
         lon_name=lon_name,
         level_name=level_name,
-        additive_z=additive_z,
+        blend_z=blend_z,
     )
     z_name = active_map.get("z")
     t_name = active_map.get("t")
@@ -170,10 +171,11 @@ def _match_surface_pressure(
 
     1. ``p_ctrl``: the surface pressure the unmodified ``z`` implies.
     2. ``p_target = (1 - blend) · p_ctrl + blend · p_sfc_target``.
-    3. ``w(p) = z(p) + R_d ∫_p^{p_bottom} ΔT d(ln p')``: ``z`` updated
+    3. ``phi_tilde(p) = z(p) + R_d ∫_p^{p_bottom} ΔT d(ln p')``: ``z`` updated
        hydrostatically for the temperature change, so the warm core raises
        the upper levels relative to the surface.
-    4. ``z_new = w + (Φ_s − w(p_target))``, so ``z_new(p_target) = Φ_s``.
+    4. ``z_new = phi_tilde + (Φ_s − phi_tilde(p_target))``, so
+       ``z_new(p_target) = Φ_s``.
 
     Where ``blend`` is zero, ``ΔT`` is zero and ``p_target = p_ctrl``, so the
     column comes back unchanged. Columns where no surface pressure can be
@@ -195,7 +197,7 @@ def _match_surface_pressure(
     below = np.concatenate(
         [np.cumsum(layer[::-1], axis=0)[::-1], np.zeros((1,) + layer.shape[1:])]
     )
-    w = z_o + R_D * below
+    phi_tilde = z_o + R_D * below
 
     z_new = z_o.copy()
     n_lat, n_lon = z_o.shape[1:]
@@ -208,8 +210,8 @@ def _match_surface_pressure(
             if not np.isfinite(p_ctrl):
                 continue
             p_target = (1.0 - b) * p_ctrl + b * float(p_sfc_target_pa[i, j])
-            shift = phi_s[i, j] - _value_at(w[:, i, j], p, p_target)
-            z_new[:, i, j] = w[:, i, j] + shift
+            shift = phi_s[i, j] - _value_at(phi_tilde[:, i, j], p, p_target)
+            z_new[:, i, j] = phi_tilde[:, i, j] + shift
 
     out = np.empty_like(z_new)
     out[order] = z_new

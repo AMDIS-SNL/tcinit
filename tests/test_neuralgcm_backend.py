@@ -74,7 +74,7 @@ def test_neuralgcm_apply_modifies_atmos_vars():
     ):
         assert name in ds_out.data_vars
 
-    # geopotential unchanged with additive_z=False and no surface matching.
+    # geopotential unchanged with blend_z=False and no surface matching.
     assert np.allclose(
         ds_out["geopotential"].values, ds["geopotential"].values, atol=1e-6
     )
@@ -262,7 +262,7 @@ def test_write_back_roundtrip_preserves_untouched_cells():
 def test_write_back_after_vortex_modifies_only_box():
     inputs, lats, lons, levels = _make_neuralgcm_inputs()
     box_center = (15.0, 130.0)
-    box_size = 3.0
+    box_size = 10.0  # wide enough on this 5.6 deg grid to leave environment cells
 
     ds = neuralgcm_backend.extract_snapshot_dataset(
         inputs,
@@ -410,7 +410,7 @@ def test_apply_warm_core_raises_upper_levels_relative_to_surface():
     assert dz[levels == 200][0] > dz[levels == 1000][0]
 
 
-def test_apply_rejects_additive_z_with_surface_matching():
+def test_apply_rejects_blend_z_with_surface_matching():
     ds = _hydrostatic_ds()
-    with pytest.raises(ValueError, match="additive_z=False"):
-        neuralgcm_backend.apply(ds, _bv_for(ds), additive_z=True)
+    with pytest.raises(ValueError, match="blend_z=False"):
+        neuralgcm_backend.apply(ds, _bv_for(ds), blend_z=True)

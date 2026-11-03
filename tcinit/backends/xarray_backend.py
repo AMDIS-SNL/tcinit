@@ -24,7 +24,7 @@ def apply(
     lat_name: str = "latitude",
     lon_name: str = "longitude",
     level_name: str = "level",
-    additive_z: bool = True,
+    blend_z: bool = True,
 ) -> xr.Dataset:
     """Apply the built vortex to ``ds`` and return a new Dataset."""
     return bv.apply(
@@ -33,5 +33,5 @@ def apply(
         lat_name=lat_name,
         lon_name=lon_name,
         level_name=level_name,
-        additive_z=additive_z,
+        blend_z=blend_z,
     )

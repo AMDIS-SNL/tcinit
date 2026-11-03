@@ -169,7 +169,7 @@ def apply(
     lat_name: str = "latitude",
     lon_name: str = "longitude",
     level_name: str = "level",
-    additive_z: bool = True,
+    blend_z: bool = True,
     var_map: Optional[Mapping[str, str]] = None,
 ) -> xr.Dataset:
     """Apply the built vortex to an already-canonical ERA5-shape Dataset.
@@ -195,7 +195,7 @@ def apply(
         lat_name=lat_name,
         lon_name=lon_name,
         level_name=level_name,
-        additive_z=additive_z,
+        blend_z=blend_z,
     )
     return follow_msl(
         ds,

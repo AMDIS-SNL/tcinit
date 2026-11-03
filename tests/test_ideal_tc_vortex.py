@@ -4,6 +4,7 @@ from datetime import datetime
 
 import numpy as np
 import pytest
+import xarray as xr
 
 from tcinit.constants import HPA_TO_PA, KNOTS_TO_MPS
 from tcinit.ideal_tc_vortex import (
@@ -139,6 +140,51 @@ def test_apply_lowers_msl_at_centre(canonical_ds, snapshot, best_track, target_t
     orig = float(canonical_ds["msl"].values[i, j])
     new = float(ds_out["msl"].values[i, j])
     assert new < orig - 1000.0  # dropped by at least 10 hPa
+
+
+@pytest.mark.parametrize("var,offset", [("t", 5.0), ("z", -500.0)])
+def test_apply_replaces_analysed_storm(
+    canonical_ds, snapshot, best_track, target_time, var, offset
+):
+    """Where blend == 1, t and z become env + K&C anomaly whatever was there."""
+    bv = BogusVortex(snapshot, best_track, target_time).build()
+    stormy = canonical_ds.copy(deep=True)
+    storm = xr.DataArray(
+        snapshot.storm_mask.astype(float), dims=("latitude", "longitude")
+    )
+    stormy[var] = stormy[var] + offset * storm  # an analysed storm, storm only
+
+    out_plain = bv.apply(canonical_ds)
+    out_stormy = bv.apply(stormy)
+
+    core = bv.blend == 1.0
+    assert core.any()
+    v_plain = out_plain[var].transpose("level", "latitude", "longitude").values
+    v_stormy = out_stormy[var].transpose("level", "latitude", "longitude").values
+    np.testing.assert_allclose(v_stormy[:, core], v_plain[:, core])
+
+    anom = {"t": bv.T_anom_K, "z": bv.Phi_anom_m2_s2}[var]
+    env = canonical_ds[var].values[:, snapshot.env_mask].mean(axis=1)
+    np.testing.assert_allclose(
+        v_plain[:, core], env[:, None] + anom[:, core], rtol=1e-6
+    )
+
+
+def test_apply_blend_z_false_leaves_z_untouched(
+    canonical_ds, snapshot, best_track, target_time
+):
+    bv = BogusVortex(snapshot, best_track, target_time).build()
+    out = bv.apply(canonical_ds, blend_z=False)
+    np.testing.assert_array_equal(out["z"].values, canonical_ds["z"].values)
+
+
+def test_apply_raises_without_environment(
+    canonical_ds, snapshot, best_track, target_time
+):
+    bv = BogusVortex(snapshot, best_track, target_time).build()
+    snapshot.env_mask = np.zeros_like(snapshot.env_mask)
+    with pytest.raises(ValueError, match="env_mask is empty"):
+        bv.apply(canonical_ds)
 
 
 def test_apply_skips_missing_variables(canonical_ds, snapshot, best_track, target_time):

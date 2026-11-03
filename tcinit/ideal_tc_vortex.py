@@ -9,9 +9,13 @@ This is a model-agnostic port of the prototype's
 ``causaltc/bogus_model/kwon_cheong_bogus.py``. Two intentional deviations
 from K&C, carried over from the prototype:
 
-1. The maximum tangential wind is placed at ``snapshot.rdr`` (the reference
-   disk radius from the Snapshot classifier) rather than at the radius of
-   maximum surface-pressure gradient.
+1. Where K&C use the radius of maximum wind ``r_m``, in the inflow angle
+   (eq. 18) and the humidity envelope (eq. 27), ``snapshot.rdr`` (the
+   reference disk radius from the Snapshot classifier) is used instead. It
+   also sets the blend radius. The wind maximum itself is not placed at
+   ``rdr``: it falls where the gradient wind of the Holland-shaped
+   geopotential anomaly peaks, set by A and B (eqs. 5-8, with the Holland
+   ``r_m`` clamped to 40-100 km).
 2. The PBL gradient-wind modifier (eq. 17,
    ``K_m(sigma) = 1 - 20.4*(sigma - 0.9)^2``) is only applied at sigma > 0.9;
    above that pressure surface the gradient wind is used unmodified.
@@ -659,7 +663,7 @@ class BogusVortex:
         lat_name: str = "latitude",
         lon_name: str = "longitude",
         level_name: str = "level",
-        additive_z: bool = True,
+        blend_z: bool = True,
     ) -> xr.Dataset:
         """Blend the built vortex into ``ds`` and return a new Dataset.
 
@@ -673,6 +677,12 @@ class BogusVortex:
         skipped. This is what lets NeuralGCM Datasets (no surface vars) and
         HICCUP-shape Datasets (no ``2t``/``10u``/``10v``) share the same
         codepath as Aurora.
+
+        Every field is replacement-blended with the weight ``self.blend``:
+        ``u``, ``v`` and the surface fields toward the K&C values, and ``t``
+        and ``z`` toward the environment profile plus K&C's anomaly. Pass
+        ``blend_z=False`` to leave ``z`` untouched (as the NeuralGCM backend
+        does before writing its own surface low into ``z``).
         """
         if not self._built:
             raise RuntimeError("BogusVortex.apply(): call build() first")
@@ -743,11 +753,9 @@ class BogusVortex:
             int(np.where(self.levels_hpa == lev)[0][0]) for lev in common_levels
         ]
 
-        # u, v: replacement; T, z: additive perturbation.
+        # u, v: replacement; T, z: replacement toward environment + anomaly
+        # (below).
         atmos_replace = {"u": self.u_bogus_mps, "v": self.v_bogus_mps}
-        atmos_additive = {"t": self.T_anom_K}
-        if additive_z:
-            atmos_additive["z"] = self.Phi_anom_m2_s2
 
         for canon, bogus_3d in atmos_replace.items():
             native = resolve(canon, var_map)
@@ -775,12 +783,39 @@ class BogusVortex:
                 out[native],
             )
 
-        for canon, bogus_3d in atmos_additive.items():
+        # ---- T, z (replacement toward environment + K&C anomaly) --------
+        # K&C's T and geopotential anomalies are measured from the
+        # environment, like p_sfc_bogus. Adding them to an analysis that
+        # already holds a warm core and a low would count those twice (and the
+        # column's thickness would no longer match the replacement-blended
+        # surface pressure), so the analysed column is blended toward
+        # env + anomaly instead. The env profile is the per-level mean over
+        # the snapshot's env_mask, the same region p_n comes from. The blend
+        # is linear, so it keeps T and z hydrostatically consistent.
+        atmos_anomaly = {"t": self.T_anom_K}
+        if blend_z:
+            atmos_anomaly["z"] = self.Phi_anom_m2_s2
+        env_da = xr.DataArray(
+            snap.env_mask,
+            dims=(lat_name, lon_name),
+            coords={lat_name: snap.box_lats, lon_name: snap.box_lons},
+        )
+        for canon, anom_3d in atmos_anomaly.items():
             native = resolve(canon, var_map)
-            if native is None or native not in out.data_vars:
+            if (
+                native is None
+                or native not in out.data_vars
+                or level_name not in out.dims
+                or common_levels.size == 0
+            ):
                 continue
-            bogus_da = xr.DataArray(
-                bogus_3d[vortex_level_idx],
+            if not snap.env_mask.any():
+                raise ValueError(
+                    "BogusVortex.apply(): snapshot.env_mask is empty, so there is "
+                    "no environment to take the env profile from; use a larger box"
+                )
+            anom_da = xr.DataArray(
+                anom_3d[vortex_level_idx],
                 dims=(level_name, lat_name, lon_name),
                 coords={
                     level_name: common_levels,
@@ -790,11 +825,12 @@ class BogusVortex:
             )
             var_da = out[native]
             var_sel = var_da.sel({level_name: common_levels})
-            added = var_sel + blend_da * bogus_da
+            env = var_sel.where(env_da).mean([lat_name, lon_name])
+            blended = (1.0 - blend_da) * var_sel + blend_da * (env + anom_da)
             out[native] = xr.where(
-                out[native][level_name].isin(common_levels),
-                added.reindex({level_name: var_da[level_name].values}),
-                out[native],
+                var_da[level_name].isin(common_levels),
+                blended.reindex({level_name: var_da[level_name].values}),
+                var_da,
             )
 
         # ---- Humidity via eq. 27 (per-level saturation blend) -----------
