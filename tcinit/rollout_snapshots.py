@@ -2050,7 +2050,7 @@ def plot_best_track_comparison(
         labels: Legend labels for the two rollouts, in ``(ctrl, bogus)`` order.
         title: Figure title.
         ylabels: Y-axis labels for the three panels, e.g. to mark a model's
-            MSLP and wind as proxies.
+            MSLP and wind as surrogates.
     """
     import matplotlib.pyplot as plt
 
