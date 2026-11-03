@@ -4,6 +4,12 @@
 
 Create initial condition datasets for tropical cyclone modeling with atmospheric models.
 
+## Specific models: Environments, backends, and demonstrations
+
+For details on environment setup, see the `envs/` folder, which includes specific instructions and modules used for setup on CEE machines.  There are two python virtual environments to set up, one for torch-based models and one for jax-based models.
+
+Supported models are listed as `backends/`.   Demonstration notebooks for each backend are given in the `notebooks/` folder.
+
 ## Developer setup
 
 ```sh
