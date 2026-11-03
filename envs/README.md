@@ -55,7 +55,8 @@ module load aue/python/3.12.4 \
     aue/gcc/12.3.0 \
     aue/hdf5/1.14.6-gcc-12.3.0-openmpi-4.1.6-cuda-12.9.0 \
     aue/openmpi/4.1.6-gcc-12.3.0-cuda-12.9.0 \
-    aue/netcdf-c/4.9.2-gcc-12.3.0-openmpi-4.1.6-cuda-12.9.0
+    aue/netcdf-c/4.9.2-gcc-12.3.0-openmpi-4.1.6-cuda-12.9.0 \
+    aue/netlib-lapack/3.11.0-gcc-12.3.0
 ```
 
 Build:
@@ -170,7 +171,14 @@ instead. To move to a newer HICCUP, change `HICCUP_REV` in
 HICCUP also needs command-line tools that these scripts don't install:
 NCO ≥ 5.3.1 (`ncremap`, `ncks`, ...) and TempestRemap (`GenerateCSMesh`,
 `GenerateOverlapMesh`, `GenerateOfflineMap`). They must be on `PATH` in the
-shell that starts Jupyter.
+shell that starts Jupyter. On cee-compute, these third-party libraries (TPLs)
+for the EAMxx backend, NCO and TempestRemap, are installed under
+`/projects/amdis/tpl`; add `/projects/amdis/tpl/bin` to `PATH` before
+starting Jupyter:
+
+```sh
+export PATH=/projects/amdis/tpl/bin:$PATH
+```
 
 ## Model checkpoint caches
 
