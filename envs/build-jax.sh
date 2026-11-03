@@ -50,6 +50,10 @@ pip install \
     cfgrib eccodes \
     jupyter
 
+# HICCUP (EAMxx initial conditions), editable from a pinned clone shared by
+# both environments; see install-hiccup.sh.
+ENV_ROOT="$ENV_ROOT" "${REPO_ROOT}/envs/install-hiccup.sh"
+
 # Named kernel so the demo notebooks can pick this env from any Jupyter
 # session (the kernel spec is a small file under ~/.local).
 python -m ipykernel install --user --name "$(basename "$VENV")" \
@@ -58,6 +62,7 @@ python -m ipykernel install --user --name "$(basename "$VENV")" \
 pip check
 python - <<'EOF'
 import jax, jaxlib
+from hiccup import hiccup  # noqa: F401
 print("jax", jax.__version__, "jaxlib", jaxlib.__version__)
 print("devices", jax.devices())
 EOF

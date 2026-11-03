@@ -38,6 +38,11 @@ fi
     echo "# $(python --version)"
     echo "# GPU: $gpu (x$ngpu)"
     echo "# $versions"
+    # HICCUP is an editable install (excluded below); record its commit.
+    hiccup_dir="$(python -c 'import hiccup, pathlib; print(pathlib.Path(hiccup.__file__).resolve().parents[1])' 2>/dev/null || true)"
+    if [[ -n "$hiccup_dir" ]]; then
+        echo "# hiccup $(git -C "$hiccup_dir" rev-parse HEAD 2>/dev/null) ($hiccup_dir; reinstall with envs/install-hiccup.sh)"
+    fi
     if [[ "$KIND" == torch ]]; then
         echo "--extra-index-url https://download.pytorch.org/whl/${cuda_tag}"
     fi

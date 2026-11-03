@@ -127,10 +127,50 @@ python3 -m venv /fgs/$USER/causaltc/torch-venv
 export PIP_CACHE_DIR=/fgs/$USER/causaltc/pip-cache
 pip install -r envs/torch-cu126.lock.txt
 pip install -e . --no-deps
+envs/install-hiccup.sh      # editable installs aren't in the lock; see "HICCUP" below
 ```
 
 If scratch is ever purged, the venv is lost but the lock file in the
 repo is not; that is the main reason to keep the lock file current.
+
+## HICCUP (EAMxx initial conditions)
+
+The EAMxx demo notebook uses [HICCUP](https://github.com/E3SM-Project/HICCUP)
+to turn ERA5 into an EAMxx initial condition. tcinit itself doesn't import
+HICCUP, so it's an environment dependency, like makani and weathernext, not
+part of the package.
+
+Both build scripts call `envs/install-hiccup.sh`, which:
+
+- clones HICCUP into `/fgs/$USER/causaltc/hiccup` (one clone shared by both
+  environments; override with `HICCUP_DIR=...`);
+- checks out the pinned commit `HICCUP_REV` (the one the notebook was written
+  against), refusing to move a clone with local changes;
+- installs `psutil` (HICCUP imports it but its `setup.py` declares no
+  dependencies) and then HICCUP itself with `pip install -e`.
+
+It's an editable install from a clone, not `pip install git+...`, because the
+notebook needs the repo's data files (`files_vert/`, `test_data/`), which
+HICCUP's `setup.py` doesn't install. The notebook finds the clone from the
+installed package (`hiccup.__file__`), so it doesn't depend on `external/`.
+
+To add HICCUP to an environment built before this, without rebuilding:
+
+```sh
+. /fgs/$USER/causaltc/torch-venv/bin/activate      # or jax-venv
+envs/install-hiccup.sh
+envs/lock.sh torch                                  # or jax
+```
+
+`lock.sh` uses `pip freeze --exclude-editable`, so HICCUP doesn't appear as a
+package line in the lock files. It writes a `# hiccup <commit>` header comment
+instead. To move to a newer HICCUP, change `HICCUP_REV` in
+`install-hiccup.sh` and rerun it in each environment.
+
+HICCUP also needs command-line tools that these scripts don't install:
+NCO ≥ 5.3.1 (`ncremap`, `ncks`, ...) and TempestRemap (`GenerateCSMesh`,
+`GenerateOverlapMesh`, `GenerateOfflineMap`). They must be on `PATH` in the
+shell that starts Jupyter.
 
 ## Model checkpoint caches
 
@@ -196,7 +236,8 @@ envs/lock.sh jax            # writes envs/jax-cuda12.lock.txt
 ```
 
 The script checks that `weathernext` and `gdm-xarray-jax` kept their git
-sources.
+sources. As with torch-venv, run `envs/install-hiccup.sh` after
+`pip install -r` when rebuilding from the lock.
 
 ## Jupyter
 

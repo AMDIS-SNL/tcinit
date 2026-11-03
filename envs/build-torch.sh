@@ -60,6 +60,10 @@ pip install -e "${REPO_ROOT}[aurora,eamxx,plotting,dev]"
 # GRIB input (HRES .grb files).
 pip install cfgrib eccodes
 
+# HICCUP (EAMxx initial conditions), editable from a pinned clone shared by
+# both environments; see install-hiccup.sh.
+ENV_ROOT="$ENV_ROOT" "${REPO_ROOT}/envs/install-hiccup.sh"
+
 # Jupyter, plus a named kernel so the demo notebooks can pick this env from
 # any Jupyter session (the kernel spec is a small file under ~/.local).
 pip install jupyter
@@ -72,6 +76,7 @@ import torch
 import torchvision
 from aurora import AuroraHighRes  # noqa: F401  (imports timm -> torchvision ops)
 from earth2studio.models.px import SFNO  # noqa: F401
+from hiccup import hiccup  # noqa: F401
 print("torch", torch.__version__, "torchvision", torchvision.__version__,
       "cuda", torch.version.cuda, "cudnn", torch.backends.cudnn.version(),
       "gpu available", torch.cuda.is_available())
