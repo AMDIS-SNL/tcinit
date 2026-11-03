@@ -28,7 +28,7 @@ dependencies = [
 [project.optional-dependencies]
 aurora = ["microsoft-aurora", "torch>=1.9"]
 neuralgcm = ["neuralgcm"]
-hiccup = ["netCDF4", "h5netcdf"]
+eamxx = ["netCDF4", "h5netcdf"]
 plotting = ["cartopy"]
 dev = [
     "pytest",
@@ -55,7 +55,7 @@ pythonpath = ["."]
 markers = [
     "aurora: requires microsoft-aurora / torch",
     "neuralgcm: requires neuralgcm / jax",
-    "hiccup: requires HICCUP-adjacent tooling",
+    "eamxx: requires HICCUP / EAMxx tooling",
     "slow: marks tests as slow",
 ]
 testpaths = ["tests"]

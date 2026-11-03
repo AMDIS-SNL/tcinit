@@ -1,7 +1,7 @@
-"""HICCUP / ERA5 initial-condition adapter.
+"""EAMxx initial-condition adapter: TC bogus in the ERA5 files HICCUP reads.
 
 HICCUP (``external/hiccup``) consumes ERA5 netCDF files from the Copernicus
-CDS and produces E3SM-ready initial conditions via horizontal/vertical remap
+CDS and produces E3SM (EAMxx, or EAM) initial conditions via horizontal/vertical remap
 plus a surface T/P adjustment. The natural TC-bogus injection point is the
 ERA5 input file, *before* HICCUP reads it — modify the netCDF, then hand it
 to HICCUP unchanged.
@@ -25,8 +25,8 @@ HICCUP-relevant variable subsets:
 - Atmospheric (K&C touches): ``t, u, v, q, z``. HICCUP-only vars that pass
   through untouched: ``ciwc, clwc, o3`` (plus ancillaries).
 - Surface (K&C touches, when present): ``msl, 2t, 10u, 10v``, plus ``sp``.
-  HICCUP's EAM path builds ``PS`` from ERA5 ``sp`` and never reads ``msl``,
-  ``2t`` or the 10 m winds, so the vortex's pressure drop only reaches E3SM
+  HICCUP builds EAMxx's ``ps`` (EAM's ``PS``) from ERA5 ``sp`` and never reads
+  ``msl``, ``2t`` or the 10 m winds, so the vortex's pressure drop only reaches E3SM
   through ``sp``: :func:`apply` scales ``sp`` by the same factor K&C applies
   to ``msl`` (see there). The other surface fields (``skt, sst, siconc, sd,
   stl1..4, tsn``) are left alone. Surface ``z`` (surface geopotential) is a
@@ -59,7 +59,7 @@ _TIME_ALIASES: tuple[str, ...] = ("time", "valid_time")
 
 # Surface fields HICCUP reads that the vortex also changes, beyond the
 # canonical SURF_VARS. Carried through extract -> apply -> write_back.
-HICCUP_SURF_VARS: tuple[str, ...] = ("sp",)
+EAMXX_SURF_VARS: tuple[str, ...] = ("sp",)
 
 
 def _detect_dim_name(ds: xr.Dataset, aliases: Sequence[str]) -> str | None:
@@ -269,7 +269,7 @@ def extract_snapshot_dataset(
             # merge below whenever the surface file is listed first.
             keep = [
                 name
-                for name in (list(SURF_VARS) + list(HICCUP_SURF_VARS))
+                for name in (list(SURF_VARS) + list(EAMXX_SURF_VARS))
                 if name in canon.data_vars
             ] + [
                 name
@@ -409,7 +409,7 @@ def write_back(
     else:
         mod_levels = np.array([], dtype=float)
 
-    surf_vars = list(SURF_VARS) + list(HICCUP_SURF_VARS)
+    surf_vars = list(SURF_VARS) + list(EAMXX_SURF_VARS)
     for canon in surf_vars + list(ATMOS_VARS):
         if canon not in modified_ds.data_vars:
             continue

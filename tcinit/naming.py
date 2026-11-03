@@ -31,7 +31,7 @@ AURORA_VAR_MAP: Mapping[str, str] = {v: v for v in CANONICAL_VARS}
 
 # ERA5 (as HICCUP consumes it), identity map for the GRIB shortName convention.
 # Kept for backwards compatibility with the xarray-passthrough apply() path
-# in hiccup_backend: when the input Dataset already uses GRIB shortnames
+# in eamxx_backend: when the input Dataset already uses GRIB shortnames
 # (2t, 10u, 10v, msl, t, u, v, q, z), no rename is needed.
 ERA5_VAR_MAP: Mapping[str, str] = {
     "msl": "msl",
@@ -48,7 +48,7 @@ ERA5_VAR_MAP: Mapping[str, str] = {
 # ERA5 as it actually lands on disk from the CDS API's netCDF export.
 # The newer CDS renames some surface fields (2t → t2m, 10u → u10, 10v → v10)
 # while keeping msl and the atmospheric names unchanged. Each canonical short
-# name maps to an ordered list of aliases; the HICCUP backend picks the first
+# name maps to an ordered list of aliases; the EAMxx backend picks the first
 # one that's present in the source file so both old-GRIB-shortname files and
 # modern CDS-netCDF files work. Surface geopotential ``z`` in the sfc file
 # is intentionally NOT the same variable as atmospheric ``z`` — the backend

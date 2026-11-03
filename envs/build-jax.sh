@@ -1,6 +1,6 @@
 #!/bin/bash
 # Build the JAX virtual environment: NeuralGCM, WeatherNext (GraphCast /
-# GenCast / WN2), HICCUP backends on CUDA 12. See envs/README.md for the host
+# GenCast / WN2), EAMxx backends on CUDA 12. See envs/README.md for the host
 # and modules this was built against.
 #
 # Usage (from anywhere, with the modules in envs/README.md loaded, so
@@ -45,7 +45,7 @@ pip install --upgrade pip
 pip install \
     "jax[cuda12]" \
     "weathernext @ git+https://github.com/google-deepmind/weathernext.git@${WEATHERNEXT_REV}" \
-    -e "${REPO_ROOT}[neuralgcm,hiccup,plotting,dev]" \
+    -e "${REPO_ROOT}[neuralgcm,eamxx,plotting,dev]" \
     gcsfs \
     cfgrib eccodes \
     jupyter

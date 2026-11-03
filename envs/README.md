@@ -6,8 +6,8 @@ when installed together.
 
 | Environment | Build script | Backends |
 |---|---|---|
-| `torch-venv` | `build-torch.sh` | Aurora, SFNO (earth2studio), HICCUP, xarray |
-| `jax-venv` | `build-jax.sh` | NeuralGCM, WeatherNext, HICCUP, xarray |
+| `torch-venv` | `build-torch.sh` | Aurora, SFNO (earth2studio), EAMxx (via HICCUP), xarray |
+| `jax-venv` | `build-jax.sh` | NeuralGCM, WeatherNext, EAMxx (via HICCUP), xarray |
 
 Home-directory quota on cee-compute is small, so environments, pip's
 wheel cache, and model checkpoints live on machine scratch under
@@ -166,7 +166,7 @@ constraint together:
 - `weathernext`, from git at the commit of the `external/weathernext`
   clone the backends were written against (`external/` is gitignored, so
   a local path would not be reproducible). It pins `xarray<=2026.2.0`.
-- tcinit with `[neuralgcm,hiccup,plotting,dev]`. NeuralGCM comes from
+- tcinit with `[neuralgcm,eamxx,plotting,dev]`. NeuralGCM comes from
   PyPI; its git version pulls `dinosaur` from git, which collides with
   WeatherNext's `dinosaur-dycore` (same `dinosaur` import name).
 - `gcsfs` (ERA5 and NeuralGCM checkpoints on `gs://`), `cfgrib`, `eccodes`.

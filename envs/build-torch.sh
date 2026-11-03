@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build the PyTorch virtual environment: Aurora, SFNO (earth2studio), HICCUP
+# Build the PyTorch virtual environment: Aurora, SFNO (earth2studio), EAMxx
 # backends on CUDA 12. See envs/README.md for the host and modules this was
 # built against.
 #
@@ -55,7 +55,7 @@ pip install "earth2studio[sfno]"
 
 # tcinit with every torch-side extra (microsoft-aurora, netCDF4, h5netcdf,
 # cartopy, dev tools).
-pip install -e "${REPO_ROOT}[aurora,hiccup,plotting,dev]"
+pip install -e "${REPO_ROOT}[aurora,eamxx,plotting,dev]"
 
 # GRIB input (HRES .grb files).
 pip install cfgrib eccodes

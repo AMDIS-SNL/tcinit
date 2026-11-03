@@ -1,2 +1,2 @@
 """Backend adapters translating between tcinit's canonical xarray schema and
-model-native initial-condition formats (Aurora, NeuralGCM, HICCUP/ERA5)."""
+model-native initial-condition formats (Aurora, NeuralGCM, EAMxx via HICCUP/ERA5)."""

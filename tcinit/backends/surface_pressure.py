@@ -2,7 +2,7 @@
 
 ``BogusVortex.apply`` blends MSLP toward the K&C surface pressure but has no
 notion of surface pressure ``sp``. Backends whose model reads ``sp`` (HICCUP
-builds E3SM ``PS`` from it; SFNO takes it as an input channel) use
+builds EAMxx's ``ps`` from it; SFNO takes it as an input channel) use
 :func:`follow_msl` so ``sp`` and ``msl`` stay consistent in the storm core.
 """
 

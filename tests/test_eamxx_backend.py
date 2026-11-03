@@ -1,4 +1,4 @@
-"""HICCUP / ERA5 adapter tests.
+"""EAMxx (HICCUP / ERA5) adapter tests.
 
 Two paths under test:
 
@@ -13,15 +13,15 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from tcinit.backends import hiccup_backend
+from tcinit.backends import eamxx_backend
 from tcinit.snapshot import Snapshot
 from tcinit.ideal_tc_vortex import BogusVortex
 from tests.conftest import DEFAULT_LEVELS_HPA, make_best_track
 
 
-def test_hiccup_apply_uses_era5_shortnames(canonical_ds):
+def test_eamxx_apply_uses_era5_shortnames(canonical_ds):
     """Canonical short names ARE the ERA5 short names, so this smoke-tests
-    the passthrough path in hiccup_backend.apply."""
+    the passthrough path in eamxx_backend.apply."""
     snap = Snapshot.from_xarray(canonical_ds)
     lat_c = float(0.5 * (snap.box_lats[0] + snap.box_lats[-1]))
     lon_c = float(0.5 * (snap.box_lons[0] + snap.box_lons[-1]))
@@ -33,7 +33,7 @@ def test_hiccup_apply_uses_era5_shortnames(canonical_ds):
     )
     bt = make_best_track(datetime(2020, 9, 1, 6), lat_deg=lat_c, lon_deg=lon_c)
     bv = BogusVortex(snap, bt, datetime(2020, 9, 1, 6)).build()
-    ds_out = hiccup_backend.apply(canonical_ds, bv)
+    ds_out = eamxx_backend.apply(canonical_ds, bv)
 
     # msl at centre should be lowered, t at 850 hPa should be modified.
     n_lat = canonical_ds.sizes["latitude"]
@@ -48,7 +48,7 @@ def test_hiccup_apply_uses_era5_shortnames(canonical_ds):
     assert not np.allclose(t850_new, t850_orig)
 
 
-def test_hiccup_apply_leaves_missing_surface_vars_alone(canonical_ds):
+def test_eamxx_apply_leaves_missing_surface_vars_alone(canonical_ds):
     """Drop 2t/10u/10v and confirm apply doesn't complain (HICCUP typically
     has these in a separate surface file that isn't part of the atmospheric
     Dataset being modified)."""
@@ -64,7 +64,7 @@ def test_hiccup_apply_leaves_missing_surface_vars_alone(canonical_ds):
     )
     bt = make_best_track(datetime(2020, 9, 1, 6), lat_deg=lat_c, lon_deg=lon_c)
     bv = BogusVortex(snap, bt, datetime(2020, 9, 1, 6)).build()
-    ds_out = hiccup_backend.apply(ds, bv)
+    ds_out = eamxx_backend.apply(ds, bv)
     assert "2t" not in ds_out.data_vars
     assert "msl" in ds_out.data_vars
 
@@ -194,7 +194,7 @@ def test_extract_canonicalises_names_and_slices_box(tmp_path):
     _write_era5_atm_file(atm)
     _write_era5_sfc_file(sfc)
 
-    box_ds = hiccup_backend.extract_snapshot_dataset(
+    box_ds = eamxx_backend.extract_snapshot_dataset(
         [str(atm), str(sfc)],
         box_center=(15.0, 130.0),
         box_size=5.0,
@@ -224,7 +224,7 @@ def test_extract_raises_on_empty_box(tmp_path):
     atm = tmp_path / "era5_atm.nc"
     _write_era5_atm_file(atm)
     with pytest.raises(ValueError, match="does not intersect"):
-        hiccup_backend.extract_snapshot_dataset(
+        eamxx_backend.extract_snapshot_dataset(
             [str(atm)],
             box_center=(0.0, 500.0),  # lon past 355
             box_size=1.0,
@@ -237,21 +237,21 @@ def test_write_back_produces_new_file_and_preserves_everything_else(tmp_path):
     _write_era5_atm_file(atm)
     _write_era5_sfc_file(sfc)
 
-    box_ds = hiccup_backend.extract_snapshot_dataset(
+    box_ds = eamxx_backend.extract_snapshot_dataset(
         [str(atm), str(sfc)],
         box_center=(15.0, 130.0),
         box_size=5.0,
     )
     bv = _build_bv_from_box(box_ds)
-    mod = hiccup_backend.apply(box_ds, bv)
+    mod = eamxx_backend.apply(box_ds, bv)
 
-    atm_out = hiccup_backend.write_back(
+    atm_out = eamxx_backend.write_back(
         str(atm),
         mod,
         box_lats=box_ds["latitude"].values,
         box_lons=box_ds["longitude"].values,
     )
-    sfc_out = hiccup_backend.write_back(
+    sfc_out = eamxx_backend.write_back(
         str(sfc),
         mod,
         box_lats=box_ds["latitude"].values,
@@ -322,15 +322,15 @@ def test_write_back_surface_z_not_clobbered_by_atmospheric_z(tmp_path):
     _write_era5_atm_file(atm)
     _write_era5_sfc_file(sfc)
 
-    box_ds = hiccup_backend.extract_snapshot_dataset(
+    box_ds = eamxx_backend.extract_snapshot_dataset(
         [str(atm), str(sfc)],
         box_center=(15.0, 130.0),
         box_size=5.0,
     )
     bv = _build_bv_from_box(box_ds)
-    mod = hiccup_backend.apply(box_ds, bv)
+    mod = eamxx_backend.apply(box_ds, bv)
 
-    sfc_out = hiccup_backend.write_back(
+    sfc_out = eamxx_backend.write_back(
         str(sfc),
         mod,
         box_lats=box_ds["latitude"].values,
@@ -353,7 +353,7 @@ def test_write_back_surface_z_not_clobbered_by_atmospheric_z(tmp_path):
 def test_write_back_refuses_to_clobber_existing_output(tmp_path):
     atm = tmp_path / "era5_atm.nc"
     _write_era5_atm_file(atm)
-    box_ds = hiccup_backend.extract_snapshot_dataset(
+    box_ds = eamxx_backend.extract_snapshot_dataset(
         [str(atm)],
         box_center=(15.0, 130.0),
         box_size=5.0,
@@ -376,23 +376,23 @@ def test_write_back_refuses_to_clobber_existing_output(tmp_path):
             },
         )
     )
-    mod = hiccup_backend.apply(box_ds, bv)
+    mod = eamxx_backend.apply(box_ds, bv)
 
-    out1 = hiccup_backend.write_back(
+    out1 = eamxx_backend.write_back(
         str(atm),
         mod,
         box_lats=box_ds["latitude"].values,
         box_lons=box_ds["longitude"].values,
     )
     with pytest.raises(FileExistsError):
-        hiccup_backend.write_back(
+        eamxx_backend.write_back(
             str(atm),
             mod,
             box_lats=box_ds["latitude"].values,
             box_lons=box_ds["longitude"].values,
         )
     # But overwrite=True works.
-    out2 = hiccup_backend.write_back(
+    out2 = eamxx_backend.write_back(
         str(atm),
         mod,
         box_lats=box_ds["latitude"].values,
@@ -408,7 +408,7 @@ def test_extract_accepts_legacy_coord_names(tmp_path):
     atm = tmp_path / "era5_atm_legacy.nc"
     _write_era5_atm_file(atm, time_name="time", level_name="level")
 
-    box_ds = hiccup_backend.extract_snapshot_dataset(
+    box_ds = eamxx_backend.extract_snapshot_dataset(
         [str(atm)],
         box_center=(15.0, 130.0),
         box_size=5.0,
@@ -422,13 +422,13 @@ def _bogus_files(tmp_path, *, order=("atm", "sfc")):
     paths = {"atm": tmp_path / "era5_atm.nc", "sfc": tmp_path / "era5_sfc.nc"}
     _write_era5_atm_file(paths["atm"])
     _write_era5_sfc_file(paths["sfc"])
-    box_ds = hiccup_backend.extract_snapshot_dataset(
+    box_ds = eamxx_backend.extract_snapshot_dataset(
         [str(paths[k]) for k in order], box_center=(15.0, 130.0), box_size=5.0
     )
     bv = _build_bv_from_box(box_ds)
-    mod = hiccup_backend.apply(box_ds, bv)
+    mod = eamxx_backend.apply(box_ds, bv)
     out = {
-        k: hiccup_backend.write_back(
+        k: eamxx_backend.write_back(
             str(paths[k]),
             mod,
             box_lats=box_ds["latitude"].values,
@@ -454,7 +454,7 @@ def test_apply_carries_msl_drop_into_sp(tmp_path):
 def test_apply_blends_sp_directly_without_msl(canonical_ds):
     ds = canonical_ds.drop_vars("msl").assign(sp=canonical_ds["msl"])
     bv = _build_bv_from_box(canonical_ds)
-    mod = hiccup_backend.apply(ds, bv)
+    mod = eamxx_backend.apply(ds, bv)
     expected = (1.0 - bv.blend) * ds["sp"].values + bv.blend * bv.p_sfc_bogus_pa
     np.testing.assert_allclose(mod["sp"].values, expected)
 
@@ -478,13 +478,13 @@ def test_write_back_keeps_finite_fill_value(tmp_path):
     ds.close()
     filled = tmp_path / "era5_sfc_filled.nc"
     ds.to_netcdf(filled, encoding={v: {"_FillValue": 1e36} for v in ds.data_vars})
-    box_ds = hiccup_backend.extract_snapshot_dataset(
+    box_ds = eamxx_backend.extract_snapshot_dataset(
         [str(filled)], box_center=(15.0, 130.0), box_size=5.0
     )
     mod = box_ds.copy(deep=True)
     mod["msl"] = mod["msl"] - 500.0
     mod["sp"] = mod["sp"] - 500.0
-    out = hiccup_backend.write_back(
+    out = eamxx_backend.write_back(
         str(filled),
         mod,
         box_lats=box_ds["latitude"].values,
