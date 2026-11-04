@@ -22,6 +22,7 @@ def follow_msl(
     msl_name: str = "msl",
     lat_name: str = "latitude",
     lon_name: str = "longitude",
+    point_dim: str = "ncol",
 ) -> xr.Dataset:
     """Set ``after[sp_name]`` from the MSLP change between ``before`` and ``after``.
 
@@ -37,11 +38,9 @@ def follow_msl(
     if msl_name in before.data_vars and msl_name in after.data_vars:
         new_sp = sp * (after[msl_name] / before[msl_name])
     else:
-        coords = {lat_name: bv.snapshot.box_lats, lon_name: bv.snapshot.box_lons}
-        blend = xr.DataArray(bv.blend, dims=(lat_name, lon_name), coords=coords)
-        p_bogus = xr.DataArray(
-            bv.p_sfc_bogus_pa, dims=(lat_name, lon_name), coords=coords
-        )
+        wrap = dict(lat_name=lat_name, lon_name=lon_name, point_dim=point_dim)
+        blend = bv.horizontal_field(bv.blend, **wrap)
+        p_bogus = bv.horizontal_field(bv.p_sfc_bogus_pa, **wrap)
         new_sp = (1.0 - blend) * sp + blend * p_bogus
     after[sp_name] = new_sp.transpose(*sp.dims)
     return after

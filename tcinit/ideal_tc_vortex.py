@@ -27,6 +27,7 @@ and the storm is treated as circular for this first pass.
 
 from __future__ import annotations
 
+import functools
 from datetime import datetime
 from typing import Mapping, Optional
 
@@ -183,6 +184,8 @@ class BogusVortex:
         self.n_radial_samples = int(n_radial_samples)
 
         self._built = False
+        # (lats, lons) when built on points instead of the snapshot's box.
+        self.points: Optional[tuple[np.ndarray, np.ndarray]] = None
 
         # Inputs (set by build()).
         self.p_c: Optional[float] = None
@@ -232,8 +235,21 @@ class BogusVortex:
     # build()
     # ------------------------------------------------------------------
 
-    def build(self, *, verbose: bool = False) -> "BogusVortex":
+    def build(
+        self,
+        *,
+        verbose: bool = False,
+        points: Optional[tuple[np.ndarray, np.ndarray]] = None,
+    ) -> "BogusVortex":
         """Precompute all intermediate fields for the bogus vortex.
+
+        By default the fields are evaluated on the snapshot's box, shaped
+        ``(lat, lon)`` or ``(level, lat, lon)``. Pass ``points=(lats, lons)``
+        (1-D, equal length) to evaluate them at those points instead, e.g. a
+        model's unstructured mesh nodes; fields are then shaped ``(n,)`` or
+        ``(level, n)``, and :meth:`apply` takes a Dataset with a point
+        dimension. Either way the vortex's parameters (p_n, T_0, R_v, levels)
+        come from the snapshot.
 
         Raises ValueError if the snapshot lacks the masks / env-means
         required by the bogus injector, or if the best-track row is missing
@@ -293,15 +309,24 @@ class BogusVortex:
         self.f_coriolis = 2.0 * OMEGA_EARTH * np.sin(np.deg2rad(lat_storm))
         cyclonic_sign = -1.0 if lat_storm < 0 else 1.0
 
-        # ---- Geometry: r and bearing per cell ----------------------------
-        n_lat = snap.box_lats.size
-        n_lon = snap.box_lons.size
-        r_grid = np.zeros((n_lat, n_lon))
-        phi_grid = np.zeros((n_lat, n_lon))
-        for i, lat in enumerate(snap.box_lats):
-            for j, lon in enumerate(snap.box_lons):
-                r_grid[i, j] = haversine_dist(lat_storm, lon_storm, lat, lon)
-                phi_grid[i, j] = great_circle_bearing(lat_storm, lon_storm, lat, lon)
+        # ---- Geometry: r and bearing per cell (or per point) --------------
+        if points is None:
+            self.points = None
+            lat_2d, lon_2d = np.meshgrid(
+                np.asarray(snap.box_lats, dtype=float),
+                np.asarray(snap.box_lons, dtype=float),
+                indexing="ij",
+            )
+        else:
+            lat_2d = np.asarray(points[0], dtype=float)
+            lon_2d = np.asarray(points[1], dtype=float)
+            if lat_2d.ndim != 1 or lat_2d.shape != lon_2d.shape:
+                raise ValueError(
+                    "BogusVortex.build(): points must be two 1-D arrays of equal length"
+                )
+            self.points = (lat_2d, lon_2d)
+        r_grid = haversine_dist(lat_storm, lon_storm, lat_2d, lon_2d)
+        phi_grid = great_circle_bearing(lat_storm, lon_storm, lat_2d, lon_2d)
         # Avoid the r=0 singularity in derivatives; 100 m floor is well below
         # any storm-scale length.
         r_grid = np.maximum(r_grid, 1e-1)
@@ -372,8 +397,8 @@ class BogusVortex:
 
         # ---- Per-level geopotential and temperature anomaly (eqs. 11-12) -
         n_lev = self.levels_hpa.size
-        T_anom = np.zeros((n_lev, n_lat, n_lon))
-        phi_field = np.zeros((n_lev, n_lat, n_lon))
+        T_anom = np.zeros((n_lev,) + r_grid.shape)
+        phi_field = np.zeros((n_lev,) + r_grid.shape)
         for k, p_hpa in enumerate(self.levels_hpa):
             p_pa = p_hpa * HPA_TO_PA
             if p_pa <= self.p_a:
@@ -471,7 +496,7 @@ class BogusVortex:
             V_g_radial[k] = -fr2 + np.sqrt(under)
 
         # Interpolate V_g(r, p) -> V_g at each (lat, lon) cell.
-        V_g_field = np.zeros((n_lev, n_lat, n_lon))
+        V_g_field = np.zeros((n_lev,) + r_grid.shape)
         for k in range(n_lev):
             V_g_field[k] = np.interp(r_grid, r_radial, V_g_radial[k])
 
@@ -520,7 +545,7 @@ class BogusVortex:
         safe_denom = np.where(np.abs(denom) > 1e-12, denom, 1.0)
         q1 = num / safe_denom
 
-        v_r_field = np.zeros((n_lev, n_lat, n_lon))
+        v_r_field = np.zeros((n_lev,) + r_grid.shape)
         for k, p_hpa in enumerate(self.levels_hpa):
             sigma = p_hpa * HPA_TO_PA / self.p_sfc_bogus_pa
             below_a = sigma < sigma_a
@@ -543,8 +568,8 @@ class BogusVortex:
         r_east = sin_phi
         r_north = cos_phi
 
-        u_field = np.zeros((n_lev, n_lat, n_lon))
-        v_field = np.zeros((n_lev, n_lat, n_lon))
+        u_field = np.zeros((n_lev,) + r_grid.shape)
+        v_field = np.zeros((n_lev,) + r_grid.shape)
         for k in range(n_lev):
             u_field[k] = V_g_field[k] * t_east + v_r_field[k] * r_east
             v_field[k] = V_g_field[k] * t_north + v_r_field[k] * r_north
@@ -558,7 +583,7 @@ class BogusVortex:
         log_denom = np.log(1.0 + 0.556 * eta)
         if abs(log_denom) < 1e-12:
             log_denom = 1.0
-        rh_env = np.zeros((n_lev, n_lat, n_lon))
+        rh_env = np.zeros((n_lev,) + r_grid.shape)
         for k, p_hpa in enumerate(self.levels_hpa):
             vertical = np.exp(-8.0 * np.log(p_hpa / P_0_HPA) ** 2)
             num_r = np.log((R_H_KM + eta * r_grid) / (R_H_KM + eta * r_m_km))
@@ -664,13 +689,17 @@ class BogusVortex:
         lon_name: str = "longitude",
         level_name: str = "level",
         blend_z: bool = True,
+        point_dim: str = "ncol",
     ) -> xr.Dataset:
         """Blend the built vortex into ``ds`` and return a new Dataset.
 
-        ``ds`` is expected to share the snapshot's box: its ``lat_name`` and
-        ``lon_name`` coordinates must exactly match ``snapshot.box_lats`` and
-        ``snapshot.box_lons``. Levels present in ``ds[level_name]`` are
-        matched against ``self.levels_hpa`` — extra levels in ``ds`` are left
+        For a vortex built on the snapshot's box, ``ds`` must share that box:
+        its ``lat_name`` and ``lon_name`` coordinates must exactly match
+        ``snapshot.box_lats`` and ``snapshot.box_lons``. For a vortex built
+        with ``points``, ``ds`` has a ``point_dim`` dimension instead, and its
+        1-D ``lat_name`` / ``lon_name`` variables along it must match those
+        points in order. Levels present in ``ds[level_name]`` are matched
+        against ``self.levels_hpa`` — extra levels in ``ds`` are left
         untouched.
 
         Variables absent from ``ds`` (or absent from ``var_map``) are silently
@@ -687,36 +716,20 @@ class BogusVortex:
         if not self._built:
             raise RuntimeError("BogusVortex.apply(): call build() first")
 
-        snap = self.snapshot
-        # Alignment check — cheap and prevents silent misregistration.
-        ds_lats = np.asarray(ds[lat_name].values, dtype=float)
-        ds_lons = np.asarray(ds[lon_name].values, dtype=float)
-        if not (
-            ds_lats.shape == snap.box_lats.shape
-            and np.allclose(ds_lats, snap.box_lats, atol=1e-6)
-        ):
-            raise ValueError(
-                "BogusVortex.apply(): ds latitudes do not match snapshot.box_lats"
-            )
-        if not (
-            ds_lons.shape == snap.box_lons.shape
-            and np.allclose(ds_lons, snap.box_lons, atol=1e-6)
-        ):
-            raise ValueError(
-                "BogusVortex.apply(): ds longitudes do not match snapshot.box_lons"
-            )
-
+        self._check_alignment(ds, lat_name, lon_name)
+        horiz = functools.partial(
+            self.horizontal_field,
+            lat_name=lat_name,
+            lon_name=lon_name,
+            point_dim=point_dim,
+        )
         out = ds.copy(deep=True)
 
         # Build the blend as a DataArray aligned by name — that way xarray
         # broadcasting handles arbitrary dim orderings (Aurora/ERA5 use
         # (level, latitude, longitude); NeuralGCM uses (level, longitude,
         # latitude)) without any transposes.
-        blend_da = xr.DataArray(
-            self.blend,
-            dims=(lat_name, lon_name),
-            coords={lat_name: snap.box_lats, lon_name: snap.box_lons},
-        )
+        blend_da = horiz(self.blend)
 
         # ---- Surface variables (replacement blend) ----------------------
         surf_map = {
@@ -729,12 +742,7 @@ class BogusVortex:
             native = resolve(canon, var_map)
             if native is None or native not in out.data_vars:
                 continue
-            bogus_da = xr.DataArray(
-                bogus_2d,
-                dims=(lat_name, lon_name),
-                coords={lat_name: snap.box_lats, lon_name: snap.box_lons},
-            )
-            out[native] = (1.0 - blend_da) * out[native] + blend_da * bogus_da
+            out[native] = (1.0 - blend_da) * out[native] + blend_da * horiz(bogus_2d)
 
         # ---- Atmospheric variables (per-level, level-name-keyed) --------
         # Only levels that are present in both the built vortex and the
@@ -753,6 +761,10 @@ class BogusVortex:
             int(np.where(self.levels_hpa == lev)[0][0]) for lev in common_levels
         ]
 
+        def levelled(field_3d):
+            da = horiz(field_3d[vortex_level_idx], extra_dims=(level_name,))
+            return da.assign_coords({level_name: common_levels})
+
         # u, v: replacement; T, z: replacement toward environment + anomaly
         # (below).
         atmos_replace = {"u": self.u_bogus_mps, "v": self.v_bogus_mps}
@@ -761,15 +773,7 @@ class BogusVortex:
             native = resolve(canon, var_map)
             if native is None or native not in out.data_vars:
                 continue
-            bogus_da = xr.DataArray(
-                bogus_3d[vortex_level_idx],
-                dims=(level_name, lat_name, lon_name),
-                coords={
-                    level_name: common_levels,
-                    lat_name: snap.box_lats,
-                    lon_name: snap.box_lons,
-                },
-            )
+            bogus_da = levelled(bogus_3d)
             # Restrict the target var to the common levels for the blend,
             # then reindex back so untouched levels are preserved.
             var_da = out[native]
@@ -790,16 +794,15 @@ class BogusVortex:
         # column's thickness would no longer match the replacement-blended
         # surface pressure), so the analysed column is blended toward
         # env + anomaly instead. The env profile is the per-level mean over
-        # the snapshot's env_mask, the same region p_n comes from. The blend
-        # is linear, so it keeps T and z hydrostatically consistent.
+        # the environment mask, the same region p_n comes from (for points,
+        # the points outside the analysed storm). The blend is linear, so it
+        # keeps T and z hydrostatically consistent.
         atmos_anomaly = {"t": self.T_anom_K}
         if blend_z:
             atmos_anomaly["z"] = self.Phi_anom_m2_s2
-        env_da = xr.DataArray(
-            snap.env_mask,
-            dims=(lat_name, lon_name),
-            coords={lat_name: snap.box_lats, lon_name: snap.box_lons},
-        )
+        env_mask = self.environment_mask()
+        env_da = horiz(env_mask)
+        horiz_dims = list(env_da.dims)
         for canon, anom_3d in atmos_anomaly.items():
             native = resolve(canon, var_map)
             if (
@@ -809,23 +812,16 @@ class BogusVortex:
                 or common_levels.size == 0
             ):
                 continue
-            if not snap.env_mask.any():
+            if not env_mask.any():
                 raise ValueError(
-                    "BogusVortex.apply(): snapshot.env_mask is empty, so there is "
-                    "no environment to take the env profile from; use a larger box"
+                    "BogusVortex.apply(): the environment mask is empty, so there "
+                    "is no environment to take the env profile from; use a "
+                    "larger box"
                 )
-            anom_da = xr.DataArray(
-                anom_3d[vortex_level_idx],
-                dims=(level_name, lat_name, lon_name),
-                coords={
-                    level_name: common_levels,
-                    lat_name: snap.box_lats,
-                    lon_name: snap.box_lons,
-                },
-            )
+            anom_da = levelled(anom_3d)
             var_da = out[native]
             var_sel = var_da.sel({level_name: common_levels})
-            env = var_sel.where(env_da).mean([lat_name, lon_name])
+            env = var_sel.where(env_da).mean(horiz_dims)
             blended = (1.0 - blend_da) * var_sel + blend_da * (env + anom_da)
             out[native] = xr.where(
                 var_da[level_name].isin(common_levels),
@@ -844,15 +840,7 @@ class BogusVortex:
             and level_name in out.dims
             and common_levels.size > 0
         ):
-            rh_env_da = xr.DataArray(
-                self.rh_envelope[vortex_level_idx],
-                dims=(level_name, lat_name, lon_name),
-                coords={
-                    level_name: common_levels,
-                    lat_name: snap.box_lats,
-                    lon_name: snap.box_lons,
-                },
-            )
+            rh_env_da = levelled(self.rh_envelope)
             p_pa_da = xr.DataArray(
                 common_levels * HPA_TO_PA,
                 dims=(level_name,),
@@ -872,3 +860,72 @@ class BogusVortex:
             )
 
         return out
+
+    # ------------------------------------------------------------------
+    # Box / point geometry helpers for apply()
+    # ------------------------------------------------------------------
+
+    def horizontal_field(
+        self,
+        values: np.ndarray,
+        *,
+        lat_name: str = "latitude",
+        lon_name: str = "longitude",
+        point_dim: str = "ncol",
+        extra_dims: tuple[str, ...] = (),
+    ) -> xr.DataArray:
+        """Wrap a field built on the box (or the points) as a DataArray.
+
+        ``values`` has the leading ``extra_dims`` (e.g. ``("level",)``)
+        followed by ``(lat, lon)`` for a box vortex or ``(n,)`` for a point
+        vortex. Box fields carry the box's lat/lon coordinates; point fields
+        carry no coordinate on ``point_dim`` and line up by position.
+        """
+        if self.points is None:
+            snap = self.snapshot
+            return xr.DataArray(
+                values,
+                dims=(*extra_dims, lat_name, lon_name),
+                coords={lat_name: snap.box_lats, lon_name: snap.box_lons},
+            )
+        return xr.DataArray(values, dims=(*extra_dims, point_dim))
+
+    def environment_mask(self) -> np.ndarray:
+        """Where the environment profiles (T_env, z_env) are taken from.
+
+        For a box vortex this is the snapshot's ``env_mask``, the region
+        ``p_n`` comes from. For a point vortex it is the points farther than
+        ``storm_radius_multiplier * rdr`` from the analysed storm centre
+        (``snapshot.loc``), the same rule applied to the points.
+        """
+        snap = self.snapshot
+        if self.points is None:
+            return np.asarray(snap.env_mask, dtype=bool)
+        lats, lons = self.points
+        r = haversine_dist(snap.loc[0], snap.loc[1], lats, lons)
+        return r > float(snap.storm_radius_multiplier) * float(snap.rdr)
+
+    def _check_alignment(self, ds: xr.Dataset, lat_name: str, lon_name: str) -> None:
+        # Cheap, and prevents silent misregistration.
+        ds_lats = np.asarray(ds[lat_name].values, dtype=float)
+        ds_lons = np.asarray(ds[lon_name].values, dtype=float)
+        if self.points is None:
+            ref_lats = np.asarray(self.snapshot.box_lats, dtype=float)
+            ref_lons = np.asarray(self.snapshot.box_lons, dtype=float)
+            what = "snapshot.box_lats", "snapshot.box_lons"
+        else:
+            ref_lats, ref_lons = self.points
+            what = "the points the vortex was built on", "the build points"
+        if not (
+            ds_lats.shape == ref_lats.shape
+            and np.allclose(ds_lats, ref_lats, atol=1e-6)
+        ):
+            raise ValueError(
+                f"BogusVortex.apply(): ds latitudes do not match {what[0]}"
+            )
+        # Compare longitudes modulo 360 so 0-360 and -180-180 inputs agree.
+        dlon = (ds_lons - ref_lons + 180.0) % 360.0 - 180.0
+        if not (ds_lons.shape == ref_lons.shape and np.allclose(dlon, 0.0, atol=1e-6)):
+            raise ValueError(
+                f"BogusVortex.apply(): ds longitudes do not match {what[1]}"
+            )

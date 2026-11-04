@@ -20,6 +20,15 @@ Two entry points are provided:
   already-canonical ``xr.Dataset``. Useful when the user has assembled a
   Dataset in memory instead of loading from disk.
 
+- **On the EAMxx mesh** — :func:`inject_on_mesh` applies the vortex to
+  HICCUP's per-variable temporary files after its horizontal remap and
+  before its surface adjustment, so K&C is evaluated at the model's own
+  nodes instead of being remapped from 0.25°. The files are then on the
+  model mesh (``ncol``) but still on the source pressure levels (``plev``,
+  Pa), so the vortex is used in pressure coordinates as on the source
+  grid, and HICCUP's later steps (topography adjustment, vertical remap,
+  supersaturation removal) still run on the result.
+
 HICCUP-relevant variable subsets:
 
 - Atmospheric (K&C touches): ``t, u, v, q, z``. HICCUP-only vars that pass
@@ -171,6 +180,7 @@ def apply(
     level_name: str = "level",
     blend_z: bool = True,
     var_map: Optional[Mapping[str, str]] = None,
+    point_dim: str = "ncol",
 ) -> xr.Dataset:
     """Apply the built vortex to an already-canonical ERA5-shape Dataset.
 
@@ -196,6 +206,7 @@ def apply(
         lon_name=lon_name,
         level_name=level_name,
         blend_z=blend_z,
+        point_dim=point_dim,
     )
     return follow_msl(
         ds,
@@ -204,6 +215,7 @@ def apply(
         msl_name=active_map.get("msl", "msl"),
         lat_name=lat_name,
         lon_name=lon_name,
+        point_dim=point_dim,
     )
 
 
@@ -498,3 +510,203 @@ def write_back(
     out.to_netcdf(output_file)
     out.close()
     return output_file
+
+
+# ---------------------------------------------------------------------------
+# On the EAMxx mesh: HICCUP's per-variable files after the horizontal remap
+# ---------------------------------------------------------------------------
+
+# tcinit canonical name -> key in HICCUP's EAMxx ``file_dict`` (the variable
+# name inside each per-variable file after ``rename_vars_multifile``).
+# ``msl`` is not one of HICCUP's EAMxx variables; add it to the HICCUP data
+# object's ``sfc_var_name_dict`` so it is remapped alongside, and drop it
+# again before ``surface_adjustment_multifile`` (see the EAMxx notebook).
+MESH_VAR_NAMES: dict[str, str] = {
+    "t": "T_mid",
+    "q": "qv",
+    "u": "horiz_winds_u",
+    "v": "horiz_winds_v",
+    "sp": "ps",
+    "msl": "msl",
+}
+
+
+def _node_coords(ds: xr.Dataset, node_dim: str, node_lat, node_lon):
+    if "lat" in ds.variables and "lon" in ds.variables:
+        return (
+            np.asarray(ds["lat"].values, dtype=float),
+            np.asarray(ds["lon"].values, dtype=float),
+        )
+    if node_lat is None or node_lon is None:
+        raise ValueError(
+            "eamxx_backend: the remapped files carry no lat/lon; pass node_lat and "
+            "node_lon (e.g. lat_d/lon_d from the topography file, in ncol order)"
+        )
+    lat = np.asarray(node_lat, dtype=float)
+    lon = np.asarray(node_lon, dtype=float)
+    if lat.size != ds.sizes[node_dim]:
+        raise ValueError(
+            f"eamxx_backend: node_lat has {lat.size} points but the files have "
+            f"{ds.sizes[node_dim]} {node_dim}"
+        )
+    return lat, lon
+
+
+def read_mesh_box(
+    file_dict: Mapping[str, str],
+    *,
+    lat_bounds: Tuple[float, float],
+    lon_bounds: Tuple[float, float],
+    node_lat: Optional[np.ndarray] = None,
+    node_lon: Optional[np.ndarray] = None,
+    names: Mapping[str, str] = MESH_VAR_NAMES,
+    plev_name: str = "plev",
+    node_dim: str = "ncol",
+) -> tuple[xr.Dataset, np.ndarray]:
+    """Load the mesh nodes inside a lat-lon box from HICCUP's per-variable files.
+
+    Args:
+        file_dict: HICCUP's ``get_multifile_dict()`` result, after
+            ``remap_horizontal_multifile``, ``rename_vars_multifile`` and
+            ``add_time_date_variables_multifile``.
+        lat_bounds, lon_bounds: the box, in degrees (inclusive). Longitudes
+            are compared modulo 360.
+        node_lat, node_lon: node coordinates in ``node_dim`` order, used when
+            the files carry no ``lat``/``lon`` variables.
+        names: canonical name -> ``file_dict`` key for the fields to load.
+        plev_name: pressure-level dimension in the files (Pa).
+        node_dim: the mesh dimension.
+
+    Returns:
+        ``(ds, node_idx)``: a canonical Dataset with dims ``(level, node_dim)``
+        (``level`` in hPa) and 1-D ``lat``/``lon`` along ``node_dim``, and the
+        indices of its nodes in the files. The first time slot is read.
+    """
+    keys = {canon: key for canon, key in names.items() if key in file_dict}
+    if not keys:
+        raise KeyError(
+            "read_mesh_box: none of the requested variables are in file_dict"
+        )
+    data, levels, idx = {}, None, None
+    for canon, key in keys.items():
+        with xr.open_dataset(file_dict[key]) as f:
+            da = f[key]
+            if "time" in da.dims:
+                da = da.isel(time=0)
+            if idx is None:
+                lat, lon = _node_coords(f, node_dim, node_lat, node_lon)
+                dlon_lo = (lon - lon_bounds[0]) % 360.0
+                width = (lon_bounds[1] - lon_bounds[0]) % 360.0
+                inside = (
+                    (lat >= lat_bounds[0]) & (lat <= lat_bounds[1]) & (dlon_lo <= width)
+                )
+                idx = np.flatnonzero(inside)
+                if idx.size == 0:
+                    raise ValueError("read_mesh_box: no mesh nodes inside the box")
+            da = da.isel({node_dim: idx}).load()
+            if plev_name in da.dims:
+                hpa = np.round(np.asarray(da[plev_name].values, dtype=float) / 100.0, 6)
+                da = da.rename({plev_name: "level"}).assign_coords(level=hpa)
+                da = da.transpose("level", node_dim)
+                levels = hpa if levels is None else levels
+            data[canon] = da.drop_vars(
+                [c for c in da.coords if c != "level"], errors="ignore"
+            )
+    ds = xr.Dataset(data)
+    ds["lat"] = ((node_dim,), lat[idx])
+    ds["lon"] = ((node_dim,), lon[idx])
+    return ds, idx
+
+
+def write_mesh_box(
+    file_dict: Mapping[str, str],
+    modified: xr.Dataset,
+    node_idx: np.ndarray,
+    *,
+    names: Mapping[str, str] = MESH_VAR_NAMES,
+    plev_name: str = "plev",
+    node_dim: str = "ncol",
+) -> list[str]:
+    """Write modified mesh nodes back into HICCUP's per-variable files, in place.
+
+    Each file is read raw (``decode_cf=False``, as HICCUP's own passes do),
+    the ``node_idx`` columns of its variable are replaced at every time slot,
+    and the file is rewritten as NETCDF4. Every other variable and attribute
+    is kept. Returns the ``file_dict`` keys that were rewritten.
+    """
+    written = []
+    for canon, key in names.items():
+        if canon not in modified.data_vars or key not in file_dict:
+            continue
+        path = file_dict[key]
+        with xr.open_dataset(path, decode_cf=False) as raw:
+            f = raw.load()
+        var = f[key]
+        if "scale_factor" in var.attrs or "add_offset" in var.attrs:
+            raise ValueError(
+                f"write_mesh_box: {path}: packed variables are not supported"
+            )
+        new = modified[canon]
+        if plev_name in var.dims:
+            hpa = np.round(np.asarray(f[plev_name].values, dtype=float) / 100.0, 6)
+            new = new.sel(level=hpa).rename({"level": plev_name})
+        order = [d for d in var.dims if d != "time"]
+        vals = new.transpose(*order).values
+        index = tuple(node_idx if d == node_dim else slice(None) for d in var.dims)
+        if "time" in var.dims:
+            vals = np.expand_dims(vals, var.dims.index("time"))
+        arr = var.values.copy()
+        arr[index] = np.broadcast_to(vals, arr[index].shape).astype(arr.dtype)
+        f[key] = var.copy(data=arr)
+        tmp = f"{path}.tcinit_tmp"
+        f.to_netcdf(tmp, format="NETCDF4", mode="w")
+        os.replace(tmp, path)
+        written.append(key)
+    return written
+
+
+def inject_on_mesh(
+    file_dict: Mapping[str, str],
+    snapshot,
+    best_track,
+    target_time,
+    *,
+    node_lat: Optional[np.ndarray] = None,
+    node_lon: Optional[np.ndarray] = None,
+    names: Mapping[str, str] = MESH_VAR_NAMES,
+    plev_name: str = "plev",
+    node_dim: str = "ncol",
+) -> tuple[BogusVortex, xr.Dataset, xr.Dataset]:
+    """Build the K&C vortex on the mesh nodes and write it into HICCUP's files.
+
+    ``snapshot`` is the storm detected on the regular lat-lon source box (as
+    :func:`tcinit.rollout_tracking.build_bogus` returns it). It supplies the
+    vortex parameters (p_n, T_0, R_v, levels) and the box: the mesh nodes
+    inside the box are read, the vortex is evaluated at them
+    (``BogusVortex.build(points=...)``), blended with :func:`apply` (``sp``
+    follows ``msl``), and written back with :func:`write_mesh_box`.
+
+    Returns:
+        ``(bv, before, after)``: the point vortex and the node Datasets
+        before and after the blend, for diagnostics.
+    """
+    lats = np.asarray(snapshot.box_lats, dtype=float)
+    lons = np.asarray(snapshot.box_lons, dtype=float)
+    before, node_idx = read_mesh_box(
+        file_dict,
+        lat_bounds=(float(lats.min()), float(lats.max())),
+        lon_bounds=(float(lons.min()), float(lons.max())),
+        node_lat=node_lat,
+        node_lon=node_lon,
+        names=names,
+        plev_name=plev_name,
+        node_dim=node_dim,
+    )
+    bv = BogusVortex(snapshot, best_track, target_time).build(
+        points=(before["lat"].values, before["lon"].values)
+    )
+    after = apply(before, bv, lat_name="lat", lon_name="lon", point_dim=node_dim)
+    write_mesh_box(
+        file_dict, after, node_idx, names=names, plev_name=plev_name, node_dim=node_dim
+    )
+    return bv, before, after

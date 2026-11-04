@@ -183,7 +183,7 @@ def test_apply_raises_without_environment(
 ):
     bv = BogusVortex(snapshot, best_track, target_time).build()
     snapshot.env_mask = np.zeros_like(snapshot.env_mask)
-    with pytest.raises(ValueError, match="env_mask is empty"):
+    with pytest.raises(ValueError, match="environment mask is empty"):
         bv.apply(canonical_ds)
 
 
@@ -221,3 +221,57 @@ def test_apply_var_map_supports_native_names(
     assert not np.allclose(
         ds_out["temperature"].values, ds_renamed["temperature"].values
     )
+
+
+# ---------------------------------------------------------------------------
+# Point (unstructured-mesh) mode
+# ---------------------------------------------------------------------------
+
+
+def _box_as_points(ds):
+    """The box's cells as an ``ncol`` list, with 1-D lat/lon variables."""
+    lat2, lon2 = np.meshgrid(ds.latitude.values, ds.longitude.values, indexing="ij")
+    data = {}
+    for name, da in ds.data_vars.items():
+        da = da.transpose(..., "latitude", "longitude")
+        flat = da.values.reshape(da.shape[:-2] + (-1,))
+        data[name] = (da.dims[:-2] + ("ncol",), flat)
+    data["lat"] = (("ncol",), lat2.ravel())
+    data["lon"] = (("ncol",), lon2.ravel())
+    return xr.Dataset(data, coords={"level": ds.level.values})
+
+
+def test_points_mode_matches_box_mode(canonical_ds, snapshot, best_track, target_time):
+    bv_box = BogusVortex(snapshot, best_track, target_time).build()
+    pts = _box_as_points(canonical_ds)
+    bv_pts = BogusVortex(snapshot, best_track, target_time).build(
+        points=(pts["lat"].values, pts["lon"].values)
+    )
+    for name in ("p_sfc_bogus_pa", "T_anom_K", "u_bogus_mps", "rh_envelope", "blend"):
+        a, b = getattr(bv_box, name), getattr(bv_pts, name)
+        np.testing.assert_allclose(b, a.reshape(a.shape[:-2] + (-1,)), err_msg=name)
+    np.testing.assert_array_equal(
+        bv_pts.environment_mask(), np.asarray(snapshot.env_mask).ravel()
+    )
+
+    out_box = _box_as_points(bv_box.apply(canonical_ds))
+    out_pts = bv_pts.apply(pts, lat_name="lat", lon_name="lon")
+    for name in ("msl", "t", "u", "v", "q", "z"):
+        np.testing.assert_allclose(
+            out_pts[name].transpose(*out_box[name].dims).values,
+            out_box[name].values,
+            rtol=1e-12,
+            err_msg=name,
+        )
+
+
+def test_points_mode_rejects_misaligned_dataset(
+    canonical_ds, snapshot, best_track, target_time
+):
+    pts = _box_as_points(canonical_ds)
+    bv = BogusVortex(snapshot, best_track, target_time).build(
+        points=(pts["lat"].values, pts["lon"].values)
+    )
+    shuffled = pts.isel(ncol=np.roll(np.arange(pts.sizes["ncol"]), 1))
+    with pytest.raises(ValueError, match="latitudes do not match"):
+        bv.apply(shuffled, lat_name="lat", lon_name="lon")

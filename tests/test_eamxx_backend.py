@@ -501,3 +501,105 @@ def test_write_back_keeps_finite_fill_value(tmp_path):
 def test_extract_keeps_3d_z_when_surface_file_comes_first(tmp_path):
     _, _, box_ds, _ = _bogus_files(tmp_path, order=("sfc", "atm"))
     assert "level" in box_ds["z"].dims
+
+
+# ---------------------------------------------------------------------------
+# On the mesh: HICCUP's per-variable files after the horizontal remap
+# ---------------------------------------------------------------------------
+
+
+def _write_hiccup_mesh_files(tmp_path, ds, extra_lat, extra_lon, with_latlon=True):
+    """Per-variable files shaped like HICCUP's after rename_vars_multifile.
+
+    Nodes = the box's cells (row-major) followed by ``extra`` nodes outside
+    the box. Atmospheric files are (time, plev, ncol) with plev in Pa,
+    surface files (time, ncol). Returns (file_dict, node_lat, node_lon).
+    """
+    lat2, lon2 = np.meshgrid(ds.latitude.values, ds.longitude.values, indexing="ij")
+    node_lat = np.concatenate([lat2.ravel(), extra_lat])
+    node_lon = np.concatenate([lon2.ravel(), extra_lon])
+    n_extra = len(extra_lat)
+    rs = np.random.RandomState(3)
+    plev = ds.level.values * 100.0
+    file_dict = {}
+    sources = {"T_mid": "t", "qv": "q", "horiz_winds_u": "u", "horiz_winds_v": "v"}
+    for key, canon in sources.items():
+        box = ds[canon].transpose("level", "latitude", "longitude").values
+        vals = np.concatenate(
+            [
+                box.reshape(box.shape[0], -1),
+                box.mean() + rs.randn(box.shape[0], n_extra),
+            ],
+            axis=1,
+        )
+        f = xr.Dataset({key: (("time", "plev", "ncol"), vals[None].astype("float32"))})
+        f = f.assign_coords(plev=("plev", plev))
+        file_dict[key] = f
+    msl = ds["msl"].values.ravel()
+    sfc = {"msl": msl, "ps": 0.999 * msl}
+    for key, box in sfc.items():
+        vals = np.concatenate([box, 101000.0 + rs.randn(n_extra)])
+        file_dict[key] = xr.Dataset(
+            {key: (("time", "ncol"), vals[None].astype("float32"))}
+        )
+    file_dict["phis"] = xr.Dataset(
+        {"phis": (("time", "ncol"), np.zeros((1, node_lat.size), "float32"))}
+    )
+    paths = {}
+    for key, f in file_dict.items():
+        f["time"] = ("time", [0.0])
+        if with_latlon:
+            f["lat"] = ("ncol", node_lat)
+            f["lon"] = ("ncol", node_lon)
+        path = tmp_path / f"tmp_data.ne30np4.L128.{key}.nc"
+        f.to_netcdf(path, format="NETCDF4")
+        paths[key] = str(path)
+    return paths, node_lat, node_lon
+
+
+@pytest.mark.parametrize("with_latlon", [True, False])
+def test_inject_on_mesh_matches_box_path(tmp_path, canonical_ds, with_latlon):
+    ds = canonical_ds.copy()
+    ds["sp"] = 0.999 * ds["msl"]
+    t = datetime(2020, 9, 1, 6)
+    snap = Snapshot.from_xarray(ds)
+    lat_c = float(0.5 * (snap.box_lats[0] + snap.box_lats[-1]))
+    lon_c = float(0.5 * (snap.box_lons[0] + snap.box_lons[-1]))
+    snap.set_storm_center(
+        loc=(lat_c, lon_c),
+        rdr_km=60.0,
+        mslp_env_mean_pa=101300.0,
+        t2m_storm_mean_k=300.0,
+    )
+    bt = make_best_track(t, lat_deg=lat_c, lon_deg=lon_c)
+    box_out = eamxx_backend.apply(ds, BogusVortex(snap, bt, t).build(), blend_z=False)
+
+    extra_lat = np.array([lat_c + 8.0, lat_c - 7.0])
+    extra_lon = np.array([lon_c + 8.0, lon_c - 9.0])
+    paths, node_lat, node_lon = _write_hiccup_mesh_files(
+        tmp_path, ds, extra_lat, extra_lon, with_latlon=with_latlon
+    )
+    originals = {k: xr.open_dataset(p).load() for k, p in paths.items()}
+    kw = {} if with_latlon else dict(node_lat=node_lat, node_lon=node_lon)
+    bv, before, after = eamxx_backend.inject_on_mesh(paths, snap, bt, t, **kw)
+    n_box = ds.sizes["latitude"] * ds.sizes["longitude"]
+    assert before.sizes["ncol"] == n_box  # the extra nodes are outside the box
+
+    for key, canon in eamxx_backend.MESH_VAR_NAMES.items():
+        new = xr.open_dataset(paths[canon]).load()[canon].isel(time=0)
+        old = originals[canon][canon].isel(time=0)
+        # Nodes outside the box are untouched.
+        np.testing.assert_array_equal(new.values[..., n_box:], old.values[..., n_box:])
+        ref = box_out[key].transpose(..., "latitude", "longitude").values
+        np.testing.assert_allclose(
+            new.values[..., :n_box],
+            ref.reshape(ref.shape[:-2] + (-1,)),
+            rtol=2e-6,  # files are float32
+            atol=1e-6 * np.abs(ref).max(),
+            err_msg=key,
+        )
+    # Files the vortex doesn't touch are left alone.
+    np.testing.assert_array_equal(
+        xr.open_dataset(paths["phis"])["phis"].values, originals["phis"]["phis"].values
+    )
+    assert np.nanmin(bv.p_sfc_bogus_pa) < 96000.0
