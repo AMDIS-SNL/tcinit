@@ -18,7 +18,7 @@ one calls these functions).
 
 from __future__ import annotations
 
-from typing import Tuple
+from typing import Optional, Sequence, Tuple
 
 import numpy as np
 import xarray as xr
@@ -144,15 +144,19 @@ def write_back(
     lat_name: str = "latitude",
     lon_name: str = "longitude",
     level_name: str = "level",
+    time_slots: Optional[Sequence[int]] = None,
 ):
     """Blend a modified canonical Dataset back into an Aurora Batch in-place.
 
     Because :meth:`tcinit.ideal_tc_vortex.BogusVortex.apply` already applied the cosine
     taper (blend=0 outside the storm mask), this is a straight overwrite of
-    the box slice — no per-cell blending is needed here. The overwrite is
-    replicated across every time slot in the batch, matching the prototype's
-    behaviour of injecting the same vortex at both timesteps of a 2-step
-    input.
+    the box slice — no per-cell blending is needed here.
+
+    ``time_slots`` selects which history indices to overwrite. The default
+    ``None`` replicates the box across every time slot, matching the
+    prototype's behaviour of injecting the same vortex at both timesteps of a
+    2-step input. Pass e.g. ``time_slots=(0,)`` to write a vortex built for
+    the t − 6 h state into that slot only.
     """
     import torch
 
@@ -167,6 +171,9 @@ def write_back(
         lons_global, np.asarray(box_lons, dtype=float), name="batch.metadata.lon"
     )
 
+    def _slots(n_times):
+        return range(n_times) if time_slots is None else [int(t) for t in time_slots]
+
     # ---- Surface fields ---------------------------------------------------
     for canon in SURF_VARS:
         if canon not in modified_ds.data_vars or canon not in batch.surf_vars:
@@ -176,8 +183,7 @@ def write_back(
         device = tensor.device
         values = np.asarray(modified_ds[canon].values, dtype=np.float64)
         val_t = torch.as_tensor(values, dtype=dtype, device=device)
-        n_times = tensor.shape[1]
-        for t in range(n_times):
+        for t in _slots(tensor.shape[1]):
             tensor[0, t, lat_sl, lon_sl] = val_t
 
     # ---- Atmospheric fields ----------------------------------------------
@@ -194,13 +200,13 @@ def write_back(
         dtype = tensor.dtype
         device = tensor.device
         da_values = np.asarray(modified_ds[canon].values, dtype=np.float64)
-        n_times = tensor.shape[1]
+        slots = _slots(tensor.shape[1])
         for batch_k, batch_lev in enumerate(batch_levels):
             src_k = level_lookup.get(int(batch_lev))
             if src_k is None:
                 continue
             slab = torch.as_tensor(da_values[src_k], dtype=dtype, device=device)
-            for t in range(n_times):
+            for t in slots:
                 tensor[0, t, batch_k, lat_sl, lon_sl] = slab
 
     return batch

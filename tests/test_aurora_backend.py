@@ -108,3 +108,35 @@ def test_write_back_matches_apply_on_dataset():
 
     # Batch cell far outside the box should be unchanged (still 101300 Pa).
     assert batch.surf_vars["msl"][0, 0, 0, 0].item() == pytest.approx(101300.0)
+
+
+def test_write_back_time_slots_limits_overwrite_to_given_slot():
+    batch = _make_batch()
+    ds = aurora_backend.extract_snapshot_dataset(
+        batch, box_center=(15.0, 130.0), box_size=3.0
+    )
+    ds_out = ds.copy(deep=True)
+    ds_out["msl"] = ds_out["msl"] - 5000.0
+    ds_out["t"] = ds_out["t"] + 3.0
+    aurora_backend.write_back(
+        batch,
+        ds_out,
+        box_lats=ds.latitude.values,
+        box_lons=ds.longitude.values,
+        time_slots=(1,),
+    )
+
+    lats_global = batch.metadata.lat.numpy()
+    lons_global = batch.metadata.lon.numpy()
+    lat_start = int(np.argmin(np.abs(lats_global - ds.latitude.values[0])))
+    lon_start = int(np.argmin(np.abs(lons_global - ds.longitude.values[0])))
+    lat_sl = slice(lat_start, lat_start + ds.sizes["latitude"])
+    lon_sl = slice(lon_start, lon_start + ds.sizes["longitude"])
+
+    msl = batch.surf_vars["msl"][0, :, lat_sl, lon_sl].numpy()
+    assert np.allclose(msl[1], ds_out["msl"].values)
+    assert np.all(msl[0] == 101300.0)
+
+    t = batch.atmos_vars["t"][0, :, :, lat_sl, lon_sl].numpy()
+    assert np.allclose(t[1], 283.0)
+    assert np.all(t[0] == 280.0)
