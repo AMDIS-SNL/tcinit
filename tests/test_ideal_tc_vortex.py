@@ -275,3 +275,71 @@ def test_points_mode_rejects_misaligned_dataset(
     shuffled = pts.isel(ncol=np.roll(np.arange(pts.sizes["ncol"]), 1))
     with pytest.raises(ValueError, match="latitudes do not match"):
         bv.apply(shuffled, lat_name="lat", lon_name="lon")
+
+
+# ---------------------------------------------------------------------------
+# Omega implied by the K&C radial wind
+# ---------------------------------------------------------------------------
+
+
+def test_omega_fields_have_level_layout(snapshot, best_track, target_time):
+    bv = BogusVortex(snapshot, best_track, target_time).build()
+    assert bv.omega_radial_pa_s.shape == bv.v_r_radial_mps.shape
+    assert bv.omega_bogus_pa_s.shape == bv.u_bogus_mps.shape
+    assert np.all(np.isfinite(bv.omega_bogus_pa_s))
+
+
+def test_omega_from_radial_wind_boundary_values(snapshot, best_track, target_time):
+    from tcinit.ideal_tc_vortex import N_SIGMA_OMEGA, _omega_from_radial_wind
+
+    bv = BogusVortex(snapshot, best_track, target_time).build()
+    r_m = bv.r_radial_km * 1000.0
+    ps = bv.p_sfc_radial_pa
+    sigma = np.linspace(0.0, 1.0, N_SIGMA_OMEGA)
+    # Column-balanced synthetic profile: inflow below sigma 0.8, outflow above.
+    shape = np.where(sigma < 0.8, 1.0, -4.0)[:, None]
+    v_r = shape * (r_m / 1e5) * np.exp(-r_m / 2e5)[None]
+    v_r = v_r - np.trapezoid(v_r, sigma, axis=0)[None]  # int v_r dsigma = 0
+    omega = _omega_from_radial_wind(sigma, r_m, ps, v_r)
+    np.testing.assert_allclose(omega[0], 0.0, atol=1e-12)
+    # sigma_dot(1) = 0, so the surface value is the kinematic v_r dps/dr.
+    np.testing.assert_allclose(
+        omega[-1], v_r[-1] * np.gradient(ps, r_m), rtol=1e-3, atol=1e-6
+    )
+
+
+def test_kc_omega_is_ascent_in_core(snapshot, best_track, target_time):
+    bv = BogusVortex(snapshot, best_track, target_time).build()
+    k500 = int(np.argmin(np.abs(np.asarray(bv.levels_hpa) - 500.0)))
+    core = bv.r_radial_km < 2.0 * bv.R_v_km
+    assert bv.omega_radial_pa_s[k500, core].min() < -0.1
+
+
+# ---------------------------------------------------------------------------
+# Weak-storm Holland-A fallback
+# ---------------------------------------------------------------------------
+
+
+def test_weak_storm_holland_failure_falls_back_to_rm_clamp(snapshot, target_time):
+    from tests.conftest import make_best_track
+
+    # Mawar's 2023-05-20 06Z TD fix: 30 kt, 994 hPa. The 30-kt radius is at
+    # the wind maximum, so the r_30 Newton solve does not converge.
+    bt = make_best_track(target_time, mslp_hpa=994.0, vmax_kt=30.0)
+    with pytest.warns(RuntimeWarning, match="did not converge"):
+        bv = BogusVortex(snapshot, bt, target_time).build()
+    assert bv.r_m_holland_km == pytest.approx(100.0)
+    assert np.isfinite(bv.u_bogus_mps).all()
+
+
+def test_strong_storm_holland_failure_still_raises(
+    snapshot, best_track, target_time, monkeypatch
+):
+    import tcinit.ideal_tc_vortex as kc
+
+    def _fail(**kwargs):
+        raise ValueError("forced")
+
+    monkeypatch.setattr(kc, "_solve_holland_A", _fail)
+    with pytest.raises(ValueError, match="forced"):
+        BogusVortex(snapshot, best_track, target_time).build()

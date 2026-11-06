@@ -34,6 +34,7 @@ import numpy as np
 import pandas as pd
 
 from tcinit.constants import HPA_TO_PA, KNOTS_TO_MPS
+from tcinit.diagnostics.gradient_wind import snapshot_gradient_wind
 from tcinit.diagnostics.mse import column_integrate_mse, mse_3d
 from tcinit.earth_util import EARTH_RADIUS_A, haversine_dist
 from tcinit.snapshot import Snapshot
@@ -147,7 +148,17 @@ def snapshot_diagnostics(
         T_avg_200_500_env_mean, T300_anomaly, T500_anomaly, T700_anomaly,
         T_avg_200_500_anomaly, warm_core, warm_core_max,
         T300_anomaly_max_val, T500_anomaly_max_val, T700_anomaly_max_val,
-        T_avg_200_500_anomaly_max_val, mse, mse_column, warm_core_criterion.
+        T_avg_200_500_anomaly_max_val, mse, mse_column, warm_core_criterion,
+        gradient_wind, gw_rmw_850_km, gw_vt_max_850, gw_vgrad_850,
+        gw_ratio_850, gw_ratio_sfc, gw_imbalance_rms.
+
+    The ``gw_*`` keys summarise gradient-wind balance
+    (:mod:`tcinit.diagnostics.gradient_wind`): ``gradient_wind`` is the full
+    :class:`~tcinit.diagnostics.gradient_wind.GradientWindBalance` (None
+    without a storm centre); ``gw_ratio_850`` is ``V_t / V_gr`` at the
+    850 hPa radius of maximum tangential wind, ``gw_ratio_sfc`` the same for
+    the 10 m wind against the MSLP gradient wind, and ``gw_imbalance_rms``
+    the RMS of ``V_t - V_gr`` (m/s) over 200-850 hPa inside the storm radius.
     """
     out: dict = {"warm_core_criterion": warm_core_criterion}
 
@@ -315,6 +326,24 @@ def snapshot_diagnostics(
     else:
         out["mse"] = None
         out["mse_column"] = None
+
+    # --- gradient-wind balance ---
+    gwb = snapshot_gradient_wind(snap) if lats is not None else None
+    out["gradient_wind"] = gwb
+    s850 = gwb.level_summary(850.0) if gwb is not None else {}
+    out["gw_rmw_850_km"] = s850.get("rmw_km", float("nan"))
+    out["gw_vt_max_850"] = s850.get("v_t_max", float("nan"))
+    out["gw_vgrad_850"] = s850.get("v_grad_at_rmw", float("nan"))
+    out["gw_ratio_850"] = s850.get("ratio", float("nan"))
+    out["gw_ratio_sfc"] = (
+        gwb.surface_summary()["ratio"] if gwb is not None else float("nan")
+    )
+    if gwb is not None and snap.rdr is not None and np.isfinite(snap.rdr):
+        out["gw_imbalance_rms"] = gwb.imbalance_rms(
+            r_max_km=snap.storm_radius_multiplier * snap.rdr
+        )
+    else:
+        out["gw_imbalance_rms"] = float("nan")
 
     return out
 
@@ -528,6 +557,7 @@ class RolloutSnapshots:
         include_raw_units: bool = True,
         include_location_details: bool = True,
         include_thermo: bool = True,
+        include_balance: bool = True,
     ) -> pd.DataFrame:
         """One row per snapshot with scalar diagnostics (best-track-comparable)."""
         rows = []
@@ -607,6 +637,21 @@ class RolloutSnapshots:
                         "T500_anomaly": diag["T500_anomaly_max_val"],
                         "T700_anomaly": diag["T700_anomaly_max_val"],
                         "T_avg_200_500_anomaly": diag["T_avg_200_500_anomaly_max_val"],
+                    }
+                )
+
+            if include_balance:
+                row.update(
+                    {
+                        k: diag[k]
+                        for k in (
+                            "gw_rmw_850_km",
+                            "gw_vt_max_850",
+                            "gw_vgrad_850",
+                            "gw_ratio_850",
+                            "gw_ratio_sfc",
+                            "gw_imbalance_rms",
+                        )
                     }
                 )
 
@@ -925,8 +970,10 @@ def _snap_bundled_to_dataset(snap: Snapshot):
 # ---------------------------------------------------------------------------
 #
 # Multi-page PDF layout (adapted from aurora_data_history.py):
-#   * one 2x2 page per snapshot (vorticity, MSLP, 10 m wind, warm core)
+#   * one 2x2 page per snapshot (vorticity, MSLP, 10 m wind, warm core),
+#     followed by its gradient-wind balance page
 #   * summary line plot (MSLP + VMAX; vorticity max + warm_core max)
+#   * gradient-wind balance time series
 #   * pressure-wind scatter
 #   * storm-track map
 #   * MSE 3-panel diagnostics
@@ -1083,6 +1130,129 @@ def _plot_snapshot_page(
     fig.suptitle(
         f"{history.cyclone_id}  valid "
         f"{snap.valid_time if snap.valid_time is not None else '?'}"
+    )
+    pdf.savefig(fig, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _balance_lims(diags) -> tuple:
+    """Shared (V_t / V_gr, imbalance) colour limits across a rollout."""
+    vt, imb = [], []
+    for d in diags:
+        g = d.get("gradient_wind")
+        if g is None or g.v_t is None:
+            continue
+        vt += [g.v_t, g.v_grad]
+        imb.append(g.imbalance)
+    return _symmetric_lim(vt), _symmetric_lim(imb)
+
+
+def _plot_balance_page(
+    history: "RolloutSnapshots",
+    snap: Snapshot,
+    pdf,
+    *,
+    vt_lim: float,
+    imb_lim: float,
+) -> None:
+    """Render one gradient-wind balance page (see plot_snapshot_diagnostics)."""
+    import matplotlib.pyplot as plt
+
+    from tcinit.plotting import _balance_figure
+
+    diag = history.diagnostics(snap)
+    rdr = snap.rdr if snap.rdr is not None else None
+
+    def _fmt(v, spec):
+        return format(v, spec) if np.isfinite(v) else "n/a"
+
+    fig = _balance_figure(
+        diag["gradient_wind"],
+        rdr_km=rdr,
+        storm_radius_km=snap.storm_radius_multiplier * rdr if rdr is not None else None,
+        vt_lim=vt_lim,
+        imb_lim=imb_lim,
+        title=(
+            f"{history.cyclone_id}  valid "
+            f"{snap.valid_time if snap.valid_time is not None else '?'}: "
+            f"gradient-wind balance (850 hPa ratio "
+            f"{_fmt(diag['gw_ratio_850'], '.2f')}, 10 m ratio "
+            f"{_fmt(diag['gw_ratio_sfc'], '.2f')}, imbalance rms "
+            f"{_fmt(diag['gw_imbalance_rms'], '.1f')} m/s)"
+        ),
+    )
+    pdf.savefig(fig, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _balance_series(hist: "RolloutSnapshots", kept: List[Snapshot]) -> dict:
+    diags = [hist.diagnostics(s) for s in kept]
+    return {
+        "t": [s.valid_time for s in kept],
+        **{
+            k: [d[k] for d in diags]
+            for k in (
+                "gw_ratio_850",
+                "gw_ratio_sfc",
+                "gw_imbalance_rms",
+                "gw_rmw_850_km",
+            )
+        },
+    }
+
+
+def _draw_balance_series(axs, series, label, style) -> None:
+    ax_ratio, ax_imb = axs
+    ax_ratio.plot(
+        series["t"],
+        series["gw_ratio_850"],
+        color="C0",
+        label=f"{label} 850 hPa",
+        **style,
+    )
+    ax_ratio.plot(
+        series["t"], series["gw_ratio_sfc"], color="C3", label=f"{label} 10 m", **style
+    )
+    ax_imb.plot(
+        series["t"],
+        series["gw_imbalance_rms"],
+        color="C2",
+        label=f"{label} rms(V_t - V_gr)",
+        **style,
+    )
+
+
+def _finish_balance_series(fig, axs, title) -> None:
+    ax_ratio, ax_imb = axs
+    ax_ratio.axhline(1.0, color="k", linewidth=0.8)
+    ax_ratio.axhline(0.8, color="C3", linestyle=":", linewidth=1.0)
+    ax_ratio.set_ylabel(r"$V_t / V_{gr}$ at RMW")
+    ax_ratio.set_title(
+        "gradient-wind ratio (1: balanced; dotted: typical friction-reduced 10 m)"
+    )
+    ax_ratio.legend(loc="best", fontsize=8)
+    ax_imb.set_ylabel(r"m s$^{-1}$")
+    ax_imb.set_title("RMS imbalance, 200-850 hPa, inside the storm radius")
+    ax_imb.set_xlabel("valid time")
+    ax_imb.legend(loc="best", fontsize=8)
+    fig.autofmt_xdate()
+    fig.suptitle(title)
+
+
+def _plot_balance_summary_page(
+    history: "RolloutSnapshots", kept: List[Snapshot], pdf
+) -> None:
+    """Time series of the gradient-wind balance diagnostics."""
+    import matplotlib.pyplot as plt
+
+    fig, axs = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
+    _draw_balance_series(
+        axs, _balance_series(history, kept), "model", {"linestyle": "-", "marker": "o"}
+    )
+    _finish_balance_series(
+        fig,
+        axs,
+        f"Gradient-wind balance: {history.cyclone_id}, start {history.start_time}",
     )
     pdf.savefig(fig, bbox_inches="tight")
     plt.close(fig)
@@ -1449,10 +1619,12 @@ def plot_rollout_snapshots(
 ) -> None:
     """Render *history* as a multi-page PDF.
 
-    One 2x2 page per snapshot with ``storm_computed`` set, then four
-    summary pages (time-series, pressure-wind, track, MSE). Colour limits
-    on the per-snapshot pages are shared across the rollout so frames are
-    directly comparable.
+    Two pages per snapshot with ``storm_computed`` set (the 2x2 map page
+    and the gradient-wind balance page of
+    :func:`tcinit.plotting.plot_snapshot_diagnostics`), then five summary
+    pages (time-series, gradient-wind balance time series, pressure-wind,
+    track, MSE). Colour limits on the per-snapshot pages are shared across
+    the rollout so frames are directly comparable.
     """
     import matplotlib.pyplot as plt
     from matplotlib.backends.backend_pdf import PdfPages
@@ -1477,6 +1649,7 @@ def plot_rollout_snapshots(
     wspd_vmin, wspd_vmax = _linear_lims([d["windspd10"] for d in diags])
     wspd_vmin = max(wspd_vmin, 0.0) if np.isfinite(wspd_vmin) else wspd_vmin
     wc_lim = _symmetric_lim([d["warm_core"] for d in diags])
+    vt_lim, imb_lim = _balance_lims(diags)
 
     with PdfPages(str(filename)) as pdf:
         for snap in kept:
@@ -1491,7 +1664,9 @@ def plot_rollout_snapshots(
                 wspd_vmax=wspd_vmax,
                 wc_lim=wc_lim,
             )
+            _plot_balance_page(history, snap, pdf, vt_lim=vt_lim, imb_lim=imb_lim)
         _plot_summary_page(history, kept, pdf, best_track=best_track)
+        _plot_balance_summary_page(history, kept, pdf)
         _plot_pressure_wind_page(history, kept, pdf, best_track=best_track)
         _plot_track_page(history, kept, pdf, best_track=best_track)
         _plot_mse_page(history, pdf)
@@ -1955,6 +2130,30 @@ def _plot_mse_comparison_page(
     plt.close(fig)
 
 
+def _plot_balance_comparison_page(
+    ctrl: "RolloutSnapshots",
+    kept_ctrl: List[Snapshot],
+    bogus: "RolloutSnapshots",
+    kept_bogus: List[Snapshot],
+    pdf,
+    *,
+    labels: tuple,
+) -> None:
+    """Gradient-wind balance time series, ctrl + bogus overlaid."""
+    import matplotlib.pyplot as plt
+
+    fig, axs = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
+    _draw_balance_series(axs, _balance_series(ctrl, kept_ctrl), labels[0], _STYLES[0])
+    _draw_balance_series(axs, _balance_series(bogus, kept_bogus), labels[1], _STYLES[1])
+    _finish_balance_series(
+        fig,
+        axs,
+        f"Gradient-wind balance: {ctrl.cyclone_id}, start {ctrl.start_time}",
+    )
+    pdf.savefig(fig, bbox_inches="tight")
+    plt.close(fig)
+
+
 def plot_rollout_comparison(
     ctrl: "RolloutSnapshots",
     bogus: "RolloutSnapshots",
@@ -1963,11 +2162,12 @@ def plot_rollout_comparison(
     best_track=None,
     labels: tuple = ("control", "bogus"),
 ) -> None:
-    """Four-page PDF comparing two rollouts of the same storm.
+    """Five-page PDF comparing two rollouts of the same storm.
 
-    Mirrors the final four pages of :func:`plot_rollout_snapshots`
-    (summary line-plots, pressure-wind scatter, storm track, MSE
-    diagnostics) with the two rollouts overlaid on the same axes.
+    Mirrors the final five pages of :func:`plot_rollout_snapshots`
+    (summary line-plots, gradient-wind balance, pressure-wind scatter,
+    storm track, MSE diagnostics) with the two rollouts overlaid on the
+    same axes.
     Variable identity is carried by colour (MSLP = C0, VMAX = C3,
     vorticity = C2, warm core = C1); run identity by linestyle/marker
     (``control`` -> solid+circle, ``bogus`` -> dashed+triangle).
@@ -2003,6 +2203,9 @@ def plot_rollout_comparison(
             pdf,
             best_track=best_track,
             labels=labels,
+        )
+        _plot_balance_comparison_page(
+            ctrl, kept_ctrl, bogus, kept_bogus, pdf, labels=labels
         )
         _plot_pressure_wind_comparison_page(
             ctrl,

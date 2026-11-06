@@ -28,14 +28,18 @@ and the storm is treated as circular for this first pass.
 from __future__ import annotations
 
 import functools
+import warnings
 from datetime import datetime
 from typing import Mapping, Optional
 
 import numpy as np
 import xarray as xr
 
+from scipy.interpolate import RegularGridInterpolator
+
 from tcinit.best_track import BestTrack
 from tcinit.constants import (
+    EARTH_RADIUS_A,
     OMEGA_EARTH,
     G_0,
     R_D,
@@ -62,6 +66,11 @@ R_H_KM = 900.0  # eq. 27 horizontal scale
 P_0_HPA = 1000.0  # eq. 27 reference pressure
 THETA_0_DEG = 30.0  # eq. 9b reference latitude
 R_A_OFFSET_KM = 700.0  # eq. 9a: r_a = r_30 + 700 km
+R_M_MIN_KM, R_M_MAX_KM = 40.0, 100.0  # K&C recovery clamp on the Holland r_m
+WEAK_STORM_KT = 40.0  # below this, a failed Holland-A solve falls back to R_M_MAX_KM
+# sigma samples for the omega integral; the outflow sech(45 (sigma - sigma_a))
+# is ~0.02 wide in sigma, so 1e-3 spacing resolves it.
+N_SIGMA_OMEGA = 1001
 
 
 def _table_2_p_a_pa(p_c_hpa: float) -> float:
@@ -107,6 +116,46 @@ def _arctan_block(
         np.arctan(np.exp(d_factor * (b - ref)))
         - np.arctan(np.exp(d_factor * (a - ref)))
     ) / d_factor
+
+
+def _kc_radial_wind(sigma, sigma_a, q0, q1, c_r, d_r, sigma_T=0.01):
+    """K&C eqs. 19-20: radial wind at ``sigma`` (broadcasts against the per-r
+    coefficients ``sigma_a, q0, q1, c_r, d_r``). Same expression as the
+    inline v_r blocks in :meth:`BogusVortex.build`."""
+    sech_45 = 1.0 / np.cosh(45.0 * (sigma - sigma_a))
+    sech_c = 1.0 / np.cosh(c_r * (sigma - sigma_a))
+    sech_d = 1.0 / np.cosh(d_r * (sigma - 0.98))
+    sech_15 = 1.0 / np.cosh(15.0 * (sigma - 0.98))
+    v_r = np.where(sigma < sigma_a, q1 * sech_45, 0.0)
+    v_r = np.where((sigma >= sigma_a) & (sigma < 0.98), q1 * sech_c + q0 * sech_d, v_r)
+    return np.where(sigma >= 0.98, q0 * sech_15, v_r)
+
+
+def _omega_from_radial_wind(sigma, r_m, p_sfc, v_r):
+    """Omega [Pa/s] on ``(sigma, r)`` implied by an axisymmetric radial wind.
+
+    Sigma-coordinate continuity with a steady surface pressure (storm-relative
+    frame, translation ignored):
+
+        p_s sigma_dot(sigma) = -int_0^sigma (1/s) d(s p_s v_r)/dr dsigma'
+        omega = p_s sigma_dot + sigma v_r dp_s/dr
+
+    with ``s = a sin(r/a)`` (divergence on the sphere). The tangential wind
+    is non-divergent and does not contribute. K&C's q1 makes
+    ``int_0^1 v_r dsigma = 0``, so ``sigma_dot(1) = 0`` and the surface value
+    is the kinematic ``v_r dp_s/dr``.
+
+    Args:
+        sigma: ``(n_sigma,)`` ascending from 0 to 1.
+        r_m: ``(n_r,)`` radius [m].
+        p_sfc: ``(n_r,)`` surface pressure [Pa].
+        v_r: ``(n_sigma, n_r)`` radial wind [m/s].
+    """
+    s = EARTH_RADIUS_A * np.sin(r_m / EARTH_RADIUS_A)
+    div = np.gradient(s * p_sfc * v_r, r_m, axis=1) / s
+    layer = 0.5 * (div[1:] + div[:-1]) * np.diff(sigma)[:, None]
+    ps_sigma_dot = -np.concatenate([np.zeros_like(div[:1]), np.cumsum(layer, axis=0)])
+    return ps_sigma_dot + sigma[:, None] * v_r * np.gradient(p_sfc, r_m)
 
 
 def _solve_holland_A(
@@ -217,6 +266,7 @@ class BogusVortex:
         self.u_bogus_mps: Optional[np.ndarray] = None
         self.v_bogus_mps: Optional[np.ndarray] = None
         self.rh_envelope: Optional[np.ndarray] = None
+        self.omega_bogus_pa_s: Optional[np.ndarray] = None
         self.blend: Optional[np.ndarray] = None
         self.storm_mask: Optional[np.ndarray] = None
 
@@ -230,6 +280,7 @@ class BogusVortex:
         self.v_r_radial_mps: Optional[np.ndarray] = None
         self.p_sfc_radial_pa: Optional[np.ndarray] = None
         self.rh_envelope_radial: Optional[np.ndarray] = None
+        self.omega_radial_pa_s: Optional[np.ndarray] = None
 
     # ------------------------------------------------------------------
     # build()
@@ -347,21 +398,38 @@ class BogusVortex:
         self.B = self.rho * np.e * self.V_g_max**2 / dp
         V_30_mps = 30.0 * KNOTS_TO_MPS
         V_g30 = (V_30_mps / K0_FRICTION) * np.cos(np.deg2rad(BETA_1_DEG))
-        self.A = _solve_holland_A(
-            B=self.B,
-            r_30_km=self.r_30_km,
-            V_g30=V_g30,
-            dp_pa=dp,
-            rho=self.rho,
-            f_coriolis=self.f_coriolis,
-        )
+        try:
+            self.A = _solve_holland_A(
+                B=self.B,
+                r_30_km=self.r_30_km,
+                V_g30=V_g30,
+                dp_pa=dp,
+                rho=self.rho,
+                f_coriolis=self.f_coriolis,
+            )
+        except ValueError:
+            # Below ~40 kt the 30-kt wind is close to the maximum wind, so the
+            # r_30 constraint barely fixes A and Newton can fail (Mawar's 30 kt
+            # TD fix at 2023-05-20 06Z does). Fall back to the upper r_m clamp
+            # below, where a converged weak-storm solve also lands; stronger
+            # storms still raise.
+            if self.V_m >= WEAK_STORM_KT * KNOTS_TO_MPS:
+                raise
+            warnings.warn(
+                f"BogusVortex.build(): Holland A did not converge for a "
+                f"{self.V_m / KNOTS_TO_MPS:.0f} kt storm (r_30={self.r_30_km:.0f} km); "
+                f"using r_m = {R_M_MAX_KM:.0f} km",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            self.A = (R_M_MAX_KM / R_0_KM) ** self.B
         # K&C recovery clamp: if r_m falls outside [40, 100] km, recompute A.
         r_m_holland_km = R_0_KM * self.A ** (1.0 / self.B)
-        if r_m_holland_km > 100.0:
-            r_m_holland_km = 100.0
+        if r_m_holland_km > R_M_MAX_KM:
+            r_m_holland_km = R_M_MAX_KM
             self.A = (r_m_holland_km / R_0_KM) ** self.B
-        elif r_m_holland_km < 40.0:
-            r_m_holland_km = 40.0
+        elif r_m_holland_km < R_M_MIN_KM:
+            r_m_holland_km = R_M_MIN_KM
             self.A = (r_m_holland_km / R_0_KM) ** self.B
         self.r_m_holland_km = r_m_holland_km
 
@@ -673,6 +741,35 @@ class BogusVortex:
         self.p_sfc_radial_pa = p_sfc_radial
         self.rh_envelope_radial = rh_env_radial
 
+        # ---- Omega implied by the radial wind ----------------------------
+        # Integrated in sigma on the radial samples (analytic v_r, fine
+        # sigma), then sampled at the levels: differencing the gridded winds
+        # instead picks up the truncation error of the tangential wind, which
+        # at 0.25 deg is as large as the signal. Levels below the bogus
+        # surface get 0.
+        sigma_fine = np.linspace(0.0, 1.0, N_SIGMA_OMEGA)
+        v_r_fine = _kc_radial_wind(
+            sigma_fine[:, None], sigma_a_r, q0_r, q1_r, c_r_radial, d_r_radial
+        )
+        omega_fine = _omega_from_radial_wind(
+            sigma_fine, r_radial * 1000.0, p_sfc_radial, v_r_fine
+        )
+        omega_interp = RegularGridInterpolator(
+            (sigma_fine, r_radial), omega_fine, bounds_error=False, fill_value=0.0
+        )
+        omega_field = np.zeros((n_lev,) + r_grid.shape)
+        omega_radial = np.zeros((n_lev, r_radial.size))
+        for k, p_hpa in enumerate(self.levels_hpa):
+            p_pa = p_hpa * HPA_TO_PA
+            omega_field[k] = omega_interp(
+                np.stack([p_pa / self.p_sfc_bogus_pa, r_grid], axis=-1)
+            )
+            omega_radial[k] = omega_interp(
+                np.stack([p_pa / p_sfc_radial, r_radial], axis=-1)
+            )
+        self.omega_bogus_pa_s = omega_field
+        self.omega_radial_pa_s = omega_radial
+
         self._built = True
         return self
 
@@ -689,6 +786,7 @@ class BogusVortex:
         lon_name: str = "longitude",
         level_name: str = "level",
         blend_z: bool = True,
+        blend_omega: bool = False,
         point_dim: str = "ncol",
     ) -> xr.Dataset:
         """Blend the built vortex into ``ds`` and return a new Dataset.
@@ -712,6 +810,12 @@ class BogusVortex:
         and ``z`` toward the environment profile plus K&C's anomaly. Pass
         ``blend_z=False`` to leave ``z`` untouched (as the NeuralGCM backend
         does before writing its own surface low into ``z``).
+
+        ``blend_omega=True`` also replacement-blends canonical ``w`` (omega,
+        Pa/s) toward :attr:`omega_bogus_pa_s`, the omega implied by K&C's
+        radial wind through continuity. ``w`` must then resolve through
+        ``var_map`` to a variable in ``ds``. Off by default: only models that
+        read omega (GraphCast / WeatherNext) need it.
         """
         if not self._built:
             raise RuntimeError("BogusVortex.apply(): call build() first")
@@ -768,6 +872,14 @@ class BogusVortex:
         # u, v: replacement; T, z: replacement toward environment + anomaly
         # (below).
         atmos_replace = {"u": self.u_bogus_mps, "v": self.v_bogus_mps}
+        if blend_omega:
+            w_native = resolve("w", var_map)
+            if w_native is None or w_native not in out.data_vars:
+                raise ValueError(
+                    "BogusVortex.apply(blend_omega=True): canonical 'w' "
+                    f"(-> {w_native!r}) is not in the Dataset"
+                )
+            atmos_replace["w"] = self.omega_bogus_pa_s
 
         for canon, bogus_3d in atmos_replace.items():
             native = resolve(canon, var_map)

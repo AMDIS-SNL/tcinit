@@ -95,6 +95,11 @@ WEATHERNEXT_VAR_MAP: Mapping[str, str] = {
     **LONGFORM_SURFACE_VAR_MAP,
 }
 
+# WeatherNext omega (Pa/s). Not in WEATHERNEXT_VAR_MAP, since the K&C vortex
+# does not write it; the WN backends extract and blend it only on request
+# (``include_omega`` / ``blend_omega``).
+WEATHERNEXT_OMEGA = "vertical_velocity"
+
 # ---------------------------------------------------------------------------
 # SFNO (earth2studio) — flat variable axis with per-level names.
 # ---------------------------------------------------------------------------

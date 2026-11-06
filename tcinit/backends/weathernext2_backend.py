@@ -43,6 +43,7 @@ def extract_snapshot_dataset(
     lat_name: str = "lat",
     lon_name: str = "lon",
     level_name: str = "level",
+    include_omega: bool = False,
 ) -> xr.Dataset:
     """Slice a lat/lon box from a WN2 inputs Dataset. See WN-Graph for details.
 
@@ -61,6 +62,7 @@ def extract_snapshot_dataset(
         lat_name=lat_name,
         lon_name=lon_name,
         level_name=level_name,
+        include_omega=include_omega,
     )
 
 
@@ -73,6 +75,7 @@ def apply(
     level_name: str = "level",
     blend_z: bool = True,
     var_map: Optional[Mapping[str, str]] = None,
+    blend_omega: bool = False,
 ) -> xr.Dataset:
     """Blend the built vortex into a WN2-extracted canonical Dataset.
 
@@ -88,7 +91,11 @@ def apply(
         level_name=level_name,
         blend_z=blend_z,
         var_map=var_map,
+        blend_omega=blend_omega,
     )
+
+
+omega_diagnostics = _wng.omega_diagnostics
 
 
 def write_back(

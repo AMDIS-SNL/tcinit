@@ -4,6 +4,8 @@
 - :func:`plot_snapshot`: 3x3 map-view of a Snapshot (vorticity, MSLP, winds,
   T-anomalies, q, warm-core sum)
 - :func:`plot_state_diff`: map-view diff of two xarray Datasets
+- :func:`plot_snapshot_diagnostics`: gradient-wind balance of a Snapshot,
+  radial-vertical (r, p) and radial profiles
 
 Map-view helpers (:func:`_add_map_labels`, :func:`_plot_marker`,
 :func:`_plot_radius_circle`) are model-agnostic; they consume cartopy only.
@@ -18,6 +20,11 @@ import numpy as np
 import xarray as xr
 
 from tcinit.constants import EARTH_RADIUS_A, HPA_TO_PA
+from tcinit.diagnostics.gradient_wind import (
+    GradientWindBalance,
+    gradient_wind_balance,
+    snapshot_gradient_wind,
+)
 from tcinit.naming import resolve
 
 # ---------------------------------------------------------------------------
@@ -686,6 +693,240 @@ def plot_snapshot(
         title = "Snapshot — " + ", ".join(parts) if parts else "Snapshot"
     fig.suptitle(title)
 
+    if filename is not None:
+        fig.savefig(filename, bbox_inches="tight", dpi=150)
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# plot_snapshot_diagnostics (gradient-wind balance, r-p view)
+# ---------------------------------------------------------------------------
+
+# Levels drawn as radial profiles, when present.
+_PROFILE_LEVELS_HPA = (850.0, 500.0, 200.0)
+
+
+def _snapshot_balance(
+    snapshot,
+    ds: Optional[xr.Dataset],
+    var_map: Optional[Mapping[str, str]],
+    level_name: str,
+) -> Optional[GradientWindBalance]:
+    """Gradient-wind balance from bundled ``src_*`` fields, else from ``ds``."""
+    if ds is None or all(
+        getattr(snapshot, f"src_{c}", None) is not None for c in ("u", "v", "z")
+    ):
+        return snapshot_gradient_wind(snapshot)
+    loc = snapshot.loc
+    if loc is None or not (np.isfinite(loc[0]) and np.isfinite(loc[1])):
+        return None
+    lat_dim, lon_dim = "latitude", "longitude"
+    fields = {}
+    for canon in ("u", "v", "z"):
+        native = resolve(canon, var_map)
+        if native is not None and native in ds.data_vars:
+            da = ds[native]
+            if level_name in da.dims:
+                da = da.sel({level_name: list(snapshot.levels)})
+            fields[canon] = np.asarray(
+                da.transpose(level_name, lat_dim, lon_dim).values, dtype=float
+            )
+    return gradient_wind_balance(
+        snapshot.box_lats,
+        snapshot.box_lons,
+        loc,
+        levels_hpa=snapshot.levels,
+        u=fields.get("u"),
+        v=fields.get("v"),
+        z=fields.get("z"),
+        msl=snapshot._msl,
+        u10=snapshot._u10,
+        v10=snapshot._v10,
+        t2m=snapshot._t2m,
+    )
+
+
+def _balance_figure(
+    gwb: Optional[GradientWindBalance],
+    *,
+    rdr_km: Optional[float] = None,
+    storm_radius_km: Optional[float] = None,
+    vt_lim: Optional[float] = None,
+    imb_lim: Optional[float] = None,
+    title: Optional[str] = None,
+    figsize: tuple = (18, 10),
+    ncontours: int = 21,
+):
+    """2x3 gradient-wind balance figure; shared by the snapshot and rollout plots.
+
+    ``vt_lim`` / ``imb_lim`` fix the colour scales (for a rollout, so frames
+    are comparable); default from this snapshot's own range.
+    """
+    fig, axs = plt.subplots(2, 3, figsize=figsize)
+    fig.subplots_adjust(wspace=0.45, hspace=0.3)
+
+    def _rings(ax):
+        for r, ls, lab in (
+            (rdr_km, "-", "rdr"),
+            (storm_radius_km, "--", "storm radius"),
+        ):
+            if r is not None and np.isfinite(r):
+                ax.axvline(r, color="k", linestyle=ls, linewidth=0.8, label=lab)
+
+    has_levels = gwb is not None and gwb.v_t is not None
+    if has_levels:
+        r, p = gwb.r_km, gwb.levels_hpa
+        order = np.argsort(p)
+        if vt_lim is None or not np.isfinite(vt_lim):
+            vt_lim = float(np.nanmax(np.abs([gwb.v_t, gwb.v_grad]))) or 1.0
+        imb = gwb.imbalance
+        if imb_lim is None or not np.isfinite(imb_lim):
+            imb_lim = float(np.nanmax(np.abs(imb))) if np.isfinite(imb).any() else 1.0
+        imb_lim = imb_lim or 1.0
+        for ax, field, ttl, cmap, lim in (
+            (axs[0, 0], gwb.v_t, r"azimuthal-mean $V_t$", "viridis", (0.0, vt_lim)),
+            (
+                axs[0, 1],
+                gwb.v_grad,
+                r"gradient wind $V_{gr}$",
+                "viridis",
+                (0.0, vt_lim),
+            ),
+            (axs[0, 2], imb, r"$V_t - V_{gr}$", "RdBu_r", (-imb_lim, imb_lim)),
+        ):
+            if not np.isfinite(field).any():
+                ax.set_title(f"{ttl} (unavailable)")
+                continue
+            levels = np.linspace(lim[0], lim[1], ncontours)
+            c = ax.contourf(
+                r, p[order], field[order], levels=levels, cmap=cmap, extend="both"
+            )
+            cb = plt.colorbar(c, ax=ax, fraction=0.046, pad=0.04)
+            cb.set_label(r"m s$^{-1}$")
+            ax.set_title(ttl)
+            ax.invert_yaxis()
+            ax.set_ylabel("pressure (hPa)")
+            ax.set_xlabel("radius (km)")
+            _rings(ax)
+    else:
+        for ax in axs[0]:
+            ax.set_title("pressure-level balance unavailable (no u, v, z)")
+
+    # Radial profiles on selected levels.
+    ax = axs[1, 0]
+    if has_levels:
+        for i, lev in enumerate(_PROFILE_LEVELS_HPA):
+            hits = np.where(gwb.levels_hpa == lev)[0]
+            if hits.size == 0:
+                continue
+            k = int(hits[0])
+            ax.plot(
+                gwb.r_km, gwb.v_t[k], "-", color=f"C{i}", label=f"$V_t$ {lev:.0f} hPa"
+            )
+            ax.plot(
+                gwb.r_km,
+                gwb.v_grad[k],
+                "--",
+                color=f"C{i}",
+                label=f"$V_{{gr}}$ {lev:.0f} hPa",
+            )
+        ax.legend(fontsize=8)
+    ax.set_title("radial profiles (solid: actual, dashed: gradient)")
+    ax.set_xlabel("radius (km)")
+    ax.set_ylabel(r"m s$^{-1}$")
+    _rings(ax)
+
+    # Surface: 10 m wind against the MSLP gradient wind.
+    ax = axs[1, 1]
+    if gwb is not None and gwb.v_t_10m is not None:
+        ax.plot(gwb.r_km, gwb.v_t_10m, "-", color="C3", label=r"10 m $V_t$")
+    if gwb is not None and gwb.v_grad_sfc is not None:
+        ax.plot(gwb.r_km, gwb.v_grad_sfc, "--", color="C3", label=r"MSLP $V_{gr}$")
+    ss = gwb.surface_summary() if gwb is not None else {"ratio": np.nan}
+    ratio_txt = f"{ss['ratio']:.2f}" if np.isfinite(ss["ratio"]) else "n/a"
+    ax.set_title(f"surface (ratio at RMW = {ratio_txt}; friction: ~0.8)")
+    ax.set_xlabel("radius (km)")
+    ax.set_ylabel(r"m s$^{-1}$")
+    if ax.get_legend_handles_labels()[0]:
+        ax.legend(fontsize=8)
+    _rings(ax)
+
+    # Ratio at the radius of maximum V_t, by level.
+    ax = axs[1, 2]
+    if has_levels:
+        ratios = np.array([gwb.level_summary(lev)["ratio"] for lev in gwb.levels_hpa])
+        ax.plot(ratios[order], gwb.levels_hpa[order], "-o", color="C0", label="levels")
+    if np.isfinite(ss["ratio"]) and gwb.p_sfc_pa is not None:
+        j = int(np.nanargmax(gwb.v_t_10m))
+        ax.plot(ss["ratio"], gwb.p_sfc_pa[j] / HPA_TO_PA, "s", color="C3", label="10 m")
+    ax.axvline(1.0, color="k", linewidth=0.8)
+    ax.axvline(
+        0.8, color="C3", linestyle=":", linewidth=1.0, label="typical 10 m (friction)"
+    )
+    ax.set_ylim(1050.0, 50.0)
+    ax.set_xlabel(r"$V_t / V_{gr}$ at RMW")
+    ax.set_ylabel("pressure (hPa)")
+    ax.set_title("balance ratio at the radius of max $V_t$")
+    ax.legend(fontsize=8)
+
+    if title is not None:
+        fig.suptitle(title)
+    return fig
+
+
+def plot_snapshot_diagnostics(
+    snapshot,
+    ds: Optional[xr.Dataset] = None,
+    *,
+    var_map: Optional[Mapping[str, str]] = None,
+    level_name: str = "level",
+    filename: Optional[str] = None,
+    figsize: tuple = (18, 10),
+    title: Optional[str] = None,
+):
+    """Gradient-wind balance diagnostics of a storm-centred Snapshot.
+
+    Panels (see :mod:`tcinit.diagnostics.gradient_wind`):
+
+      [0,0] azimuthal-mean tangential wind V_t(r, p)
+      [0,1] gradient wind V_gr(r, p) from the azimuthal-mean geopotential
+      [0,2] V_t - V_gr                   (red: supergradient)
+      [1,0] V_t and V_gr radial profiles at 850, 500, 200 hPa
+      [1,1] 10 m V_t vs. the MSLP gradient wind
+      [1,2] V_t / V_gr at the radius of maximum V_t, by level and at 10 m
+
+    Vertical lines mark ``snapshot.rdr`` and the storm radius. Pressure-level
+    fields come from the snapshot's bundled ``src_u``/``src_v``/``src_z``
+    (attached by :func:`tcinit.rollout_tracking.snapshot_from_box`), or from
+    ``ds`` (translated through ``var_map``) when those are absent.
+
+    Returns the figure; with ``filename`` it is also saved.
+    """
+    gwb = _snapshot_balance(snapshot, ds, var_map, level_name)
+    if title is None:
+        parts = []
+        if snapshot.valid_time is not None:
+            parts.append(f"{snapshot.valid_time:%Y-%m-%d %HZ}")
+        if snapshot.loc is not None and all(np.isfinite(snapshot.loc)):
+            parts.append(f"loc=({snapshot.loc[0]:.2f} N, {snapshot.loc[1]:.2f} E)")
+        if gwb is not None:
+            s850 = gwb.level_summary(850.0)
+            if np.isfinite(s850["ratio"]):
+                parts.append(
+                    f"850 hPa: V_t {s850['v_t_max']:.1f} / V_gr "
+                    f"{s850['v_grad_at_rmw']:.1f} m/s at {s850['rmw_km']:.0f} km"
+                )
+        title = "Gradient-wind balance — " + ", ".join(parts)
+    rdr = snapshot.rdr if snapshot.rdr is not None else None
+    fig = _balance_figure(
+        gwb,
+        rdr_km=rdr,
+        storm_radius_km=(
+            snapshot.storm_radius_multiplier * rdr if rdr is not None else None
+        ),
+        title=title,
+        figsize=figsize,
+    )
     if filename is not None:
         fig.savefig(filename, bbox_inches="tight", dpi=150)
     return fig
